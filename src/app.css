@@ -1,0 +1,479 @@
+.redcourt-app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  color: #f1f5f9;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 20px;
+  padding: 1.5rem 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 0.68rem;
+  color: #fbbf24;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 2vw, 2.6rem);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.user-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.6rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #bfdbfe;
+  font-size: 0.88rem;
+}
+
+.auth-layout,
+.dashboard {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.auth-layout {
+  grid-template-columns: 1.3fr 0.7fr;
+}
+
+.dashboard {
+  grid-template-columns: 1.2fr 0.8fr;
+}
+
+.panel,
+.auth-panel,
+.info-panel {
+  background: #111827;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 20px;
+  padding: 1.4rem;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.2);
+}
+
+.auth-panel,
+.info-panel {
+  min-height: 420px;
+}
+
+.auth-panel h2,
+.panel h2,
+.info-panel h3 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.auth-form,
+.booking-form-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.role-switch {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.25rem 0;
+}
+
+.auth-form label,
+.booking-form-grid label,
+.panel-header label {
+  display: grid;
+  gap: 0.5rem;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+input,
+select {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.9);
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  padding: 0.85rem 0.9rem;
+  box-sizing: border-box;
+}
+
+.password-input-wrap {
+  position: relative;
+  display: block;
+}
+
+.password-input-wrap input {
+  padding-right: 3rem;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.75rem;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  place-items: center;
+  transform: translateY(-50%);
+  background: transparent;
+  color: #cbd5e1;
+}
+
+.password-toggle:hover {
+  transform: translateY(-50%);
+  color: #f8fafc;
+}
+
+.eye-icon {
+  position: relative;
+  display: block;
+  width: 1.05rem;
+  height: 0.68rem;
+  border: 1.5px solid currentColor;
+  border-radius: 75% 15%;
+  transform: rotate(45deg);
+}
+
+.eye-icon::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.28rem;
+  height: 0.28rem;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+  transform: translate(-50%, -50%);
+}
+
+.otp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.otp-token {
+  color: #facc15;
+  font-weight: 700;
+}
+
+.otp-token.muted {
+  color: #94a3b8;
+}
+
+.otp-message {
+  margin: -0.5rem 0 0;
+  color: #fbbf24;
+  font-size: 0.9rem;
+}
+
+.auth-error {
+  margin: 0;
+  color: #fecaca;
+  font-size: 0.9rem;
+}
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.8rem 1.1rem;
+  border-radius: 12px;
+  font-weight: 700;
+}
+
+.primary {
+  background: linear-gradient(135deg, #ef4444, #f97316);
+  color: white;
+}
+
+.secondary {
+  background: rgba(148, 163, 184, 0.08);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.secondary.danger {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fecaca;
+}
+
+.wide {
+  width: 100%;
+}
+
+.info-panel ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #cbd5e1;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.booking-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.time-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 1.2rem 0;
+}
+
+.time-slot {
+  background: rgba(30, 41, 59, 0.95);
+  color: #e2e8f0;
+  padding: 0.8rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.time-slot.selected {
+  background: #dc2626;
+  color: white;
+  border-color: transparent;
+}
+
+.time-slot.occupied {
+  background: rgba(127, 29, 29, 0.8);
+  color: #fecaca;
+}
+
+.booking-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.booking-summary div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.booking-summary span,
+.muted {
+  color: #94a3b8;
+}
+
+.payment-panel {
+  grid-column: 1 / -1;
+}
+
+.payment-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.7);
+  border-radius: 12px;
+}
+
+.payment-buttons {
+  display: flex;
+  gap: 0.8rem;
+}
+
+.reservation-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.reservation-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.reservation-card h3 {
+  margin: 0.2rem 0;
+}
+
+.reservation-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.status {
+  margin-top: 0.3rem;
+  font-weight: 700;
+  color: #fbbf24;
+}
+
+.status--pending {
+  color: #fbbf24;
+}
+
+.deposit-tag {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, 0.12);
+  padding: 0.5rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.empty-state {
+  color: #94a3b8;
+}
+
+.court-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.court-card {
+  background: rgba(15, 23, 42, 0.8);
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.court-card h3 {
+  margin: 0 0 0.3rem;
+}
+
+.slot-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+}
+
+.slot {
+  font-size: 0.72rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 8px;
+}
+
+.slot.free {
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+}
+
+.slot.occupied {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+}
+
+@media (max-width: 900px) {
+  .auth-layout,
+  .dashboard,
+  .court-grid,
+  .booking-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar,
+  .panel-header,
+  .reservation-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .time-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .redcourt-app {
+    padding: 1rem;
+  }
+
+  .topbar {
+    padding: 1.25rem;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .topbar-actions button {
+    flex: 1 1 auto;
+  }
+
+  .panel,
+  .auth-panel,
+  .info-panel {
+    padding: 1rem;
+  }
+
+  .booking-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-buttons {
+    flex-wrap: wrap;
+  }
+
+  .payment-buttons button {
+    flex: 1 1 100%;
+  }
+}
