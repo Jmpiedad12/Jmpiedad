@@ -6,6 +6,7 @@ import path from 'node:path'
 const PORT = Number(process.env.AUTH_PORT || 4174)
 const SESSION_DURATION = 8 * 60 * 60 * 1000
 const OTP_DURATION = 10 * 60 * 1000
+const ADMIN_LIMIT = 5
 const DATA_DIRECTORY = path.join(process.cwd(), '.redcourt-data')
 const ACCOUNTS_PATH = path.join(DATA_DIRECTORY, 'accounts.json')
 const sessions = new Map()
@@ -29,26 +30,30 @@ const hashPassword = (password, salt = randomBytes(16).toString('hex')) => ({
   hash: scryptSync(password, salt, 64).toString('hex'),
 })
 
-const publicAccount = ({ username, role }) => ({ username, role })
+const publicAccount = (account) => ({
+  username: account.username,
+  role: account.role,
+  name: account.name || '',
+  birthdate: account.birthdate || '',
+  phone: account.phone || (account.contact && !account.contact.includes('@') ? account.contact : ''),
+  email: account.email || (account.contact?.includes('@') ? account.contact : ''),
+})
 
 const bootstrapAdmin = () => {
   const username = process.env.ADMIN_USERNAME?.trim()
   const password = process.env.ADMIN_PASSWORD
-  if (!username && !password) {
-    const accounts = readAccounts()
-    const players = accounts.filter((account) => account.role !== 'admin')
-    if (players.length !== accounts.length) saveAccounts(players)
-    return
-  }
+  if (!username && !password) return
   if (!username || !password || password.length < 12) {
     throw new Error('Set both ADMIN_USERNAME and ADMIN_PASSWORD (at least 12 characters).')
   }
 
   const normalizedUsername = username.toLowerCase()
-  const accounts = readAccounts().filter((account) => (
-    account.role !== 'admin' || account.username.toLowerCase() === normalizedUsername
-  ))
+  const accounts = readAccounts()
   const existing = accounts.find((account) => account.username.toLowerCase() === normalizedUsername)
+  const adminCount = accounts.filter((account) => account.role === 'admin').length
+  if ((!existing || existing.role !== 'admin') && adminCount >= ADMIN_LIMIT) {
+    throw new Error(`No more than ${ADMIN_LIMIT} admin accounts are allowed.`)
+  }
   const credentials = hashPassword(password)
   if (existing) {
     Object.assign(existing, credentials, { username, role: 'admin' })
@@ -127,6 +132,25 @@ const normalizeContact = (value) => value.trim().toLowerCase()
 const isEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 const isPhone = (value) => /^\+?[\d\s()-]{7,20}$/.test(value)
 
+const deliverSms = async (contact, message) => {
+  const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER } = process.env
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FROM_NUMBER) {
+    throw new Error('SMS delivery is not configured on the server.')
+  }
+  const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64')
+  const body = new URLSearchParams({
+    To: contact.replace(/[\s()-]/g, ''),
+    From: TWILIO_FROM_NUMBER,
+    Body: message,
+  })
+  const result = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, {
+    method: 'POST',
+    headers: { Authorization: `Basic ${credentials}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+  if (!result.ok) throw new Error('The SMS provider could not send the message.')
+}
+
 const deliverOtp = async (contact, code) => {
   if (isEmail(contact)) {
     const { RESEND_API_KEY, RESEND_FROM } = process.env
@@ -146,22 +170,7 @@ const deliverOtp = async (contact, code) => {
   }
 
   if (isPhone(contact)) {
-    const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER } = process.env
-    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FROM_NUMBER) {
-      throw new Error('SMS OTP delivery is not configured on the server.')
-    }
-    const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64')
-    const body = new URLSearchParams({
-      To: contact.replace(/[\s()-]/g, ''),
-      From: TWILIO_FROM_NUMBER,
-      Body: `Your Red Court verification code is ${code}. It expires in 10 minutes.`,
-    })
-    const result = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, {
-      method: 'POST',
-      headers: { Authorization: `Basic ${credentials}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    })
-    if (!result.ok) throw new Error('The SMS provider could not send the OTP.')
+    await deliverSms(contact, `Your Red Court verification code is ${code}. It expires in 10 minutes.`)
     return
   }
 
@@ -201,6 +210,80 @@ const server = createServer(async (request, response) => {
       const session = readSession(request)
       if (!session?.account) return sendJson(response, 401, { error: 'Not signed in.' })
       return sendJson(response, 200, { user: publicAccount(session.account) })
+    }
+
+    if (route === 'PUT /api/account/profile') {
+      const session = readSession(request)
+      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to manage your account.' })
+
+      const body = await readBody(request)
+      const name = String(body.name || '').trim()
+      const birthdate = String(body.birthdate || '').trim()
+      const phone = normalizeContact(String(body.phone || ''))
+      const email = normalizeContact(String(body.email || ''))
+      const today = new Date().toISOString().slice(0, 10)
+      if (name.length < 2 || name.length > 100) {
+        return sendJson(response, 400, { error: 'Name must be between 2 and 100 characters.' })
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(birthdate) || Number.isNaN(Date.parse(`${birthdate}T00:00:00Z`)) || birthdate > today) {
+        return sendJson(response, 400, { error: 'Enter a valid birthdate that is not in the future.' })
+      }
+      if (!isPhone(phone)) return sendJson(response, 400, { error: 'Enter a valid contact number.' })
+      if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
+
+      const accounts = readAccounts()
+      const accountIndex = accounts.findIndex((account) => (
+        account.username === session.account.username && account.role === session.account.role
+      ))
+      if (accountIndex === -1) return sendJson(response, 401, { error: 'Account not found.' })
+      const duplicateContact = accounts.some((account, index) => (
+        index !== accountIndex && (account.phone === phone || account.email === email || account.contact === phone || account.contact === email)
+      ))
+      if (duplicateContact) return sendJson(response, 409, { error: 'That phone number or email is already in use.' })
+
+      Object.assign(accounts[accountIndex], { name, birthdate, phone, email })
+      saveAccounts(accounts)
+      return sendJson(response, 200, { user: publicAccount(accounts[accountIndex]) })
+    }
+
+    if (route === 'POST /api/admin/reservations/confirmed') {
+      const session = readSession(request)
+      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+
+      const body = await readBody(request)
+      const username = String(body.username || '').trim()
+      const date = String(body.date || '').trim()
+      const slots = Array.isArray(body.slots) ? body.slots : []
+      const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+      const validSlots = slots.length > 0 && slots.length <= 36 && slots.every((slot) => (
+        Number.isInteger(slot.courtId) && slot.courtId >= 1 && slot.courtId <= 9 &&
+        /^(?:0[89]|1\d|2[01]):00$/.test(String(slot.time))
+      ))
+      if (!username || !validDate || !validSlots) {
+        return sendJson(response, 400, { error: 'Reservation confirmation details are invalid.' })
+      }
+
+      const account = readAccounts().find((item) => (
+        item.username.toLowerCase() === username.toLowerCase() && item.role === 'player'
+      ))
+      if (!account) return sendJson(response, 404, { error: 'Player account not found.' })
+      const phone = account.phone || (isPhone(account.contact || '') ? account.contact : '')
+      if (!isPhone(phone || '')) return sendJson(response, 400, { error: 'This user has no valid contact number on their account.' })
+
+      const day = new Intl.DateTimeFormat('en-PH', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        timeZone: 'UTC',
+      }).format(new Date(`${date}T00:00:00Z`))
+      const courtTimes = [...new Set(slots.map((slot) => slot.courtId))].map((courtId) => {
+        const times = slots.filter((slot) => slot.courtId === courtId).map((slot) => slot.time).join(', ')
+        return `Court ${courtId} at ${times}`
+      }).join('; ')
+      const name = account.name?.trim() || account.username
+      await deliverSms(phone, `Hi ${name}, your Red Court reservation is confirmed for ${day}: ${courtTimes}.`)
+      return sendJson(response, 200, { ok: true, phoneLastFour: phone.replace(/\D/g, '').slice(-4) })
     }
 
     if (route === 'POST /api/auth/otp') {
@@ -246,11 +329,19 @@ const server = createServer(async (request, response) => {
         return sendJson(response, 409, { error: 'That email or phone number is already in use.' })
       }
 
+      const role = body.role === 'admin' ? 'admin-pending' : 'player'
+      if (role === 'admin-pending' && accounts.filter((account) => account.role === 'admin').length >= ADMIN_LIMIT) {
+        return sendJson(response, 409, { error: `The limit of ${ADMIN_LIMIT} admin accounts has been reached.` })
+      }
+
       const credentials = hashPassword(password)
-      const account = { username, role: 'player', contact, ...credentials }
+      const account = { username, role, contact, ...credentials }
       accounts.push(account)
       saveAccounts(accounts)
       pendingOtps.delete(contact)
+      if (role === 'admin-pending') {
+        return sendJson(response, 202, { pendingApproval: true, message: 'Your admin account request was sent for approval.' })
+      }
       startSession(response, account)
       return sendJson(response, 201, { user: publicAccount(account) })
     }
@@ -278,6 +369,51 @@ const server = createServer(async (request, response) => {
 
       startSession(response, account)
       return sendJson(response, 200, { user: publicAccount(account) })
+    }
+
+    if (route === 'GET /api/admin/requests') {
+      const session = readSession(request)
+      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const accounts = readAccounts()
+      return sendJson(response, 200, {
+        requests: accounts
+          .filter((account) => account.role === 'admin-pending')
+          .map(({ username, contact }) => ({ username, contact })),
+        activeAdminCount: accounts.filter((account) => account.role === 'admin').length,
+        adminLimit: ADMIN_LIMIT,
+      })
+    }
+
+    const adminRequestAction = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/admin\/requests\/([^/]+)\/(approve|reject)$/)
+      : null
+    if (adminRequestAction) {
+      const session = readSession(request)
+      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+
+      const username = decodeURIComponent(adminRequestAction[1])
+      const action = adminRequestAction[2]
+      const accounts = readAccounts()
+      const requestIndex = accounts.findIndex((account) => (
+        account.role === 'admin-pending' && account.username.toLowerCase() === username.toLowerCase()
+      ))
+      if (requestIndex === -1) return sendJson(response, 404, { error: 'Admin request not found.' })
+
+      if (action === 'approve') {
+        const activeAdminCount = accounts.filter((account) => account.role === 'admin').length
+        if (activeAdminCount >= ADMIN_LIMIT) {
+          return sendJson(response, 409, { error: `The limit of ${ADMIN_LIMIT} admin accounts has been reached.` })
+        }
+        accounts[requestIndex].role = 'admin'
+      } else {
+        accounts.splice(requestIndex, 1)
+      }
+
+      saveAccounts(accounts)
+      return sendJson(response, 200, {
+        ok: true,
+        activeAdminCount: accounts.filter((account) => account.role === 'admin').length,
+      })
     }
 
     if (route === 'POST /api/auth/logout') {

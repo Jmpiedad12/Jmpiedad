@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import './app.css'
 
 const COURTS = [
@@ -13,7 +13,10 @@ const COURTS = [
   { id: 9, name: 'Court 9', sports: ['Badminton'] },
 ]
 
-const DEPOSITS = { Pickleball: 200, Badminton: 175 }
+const HOURLY_RATES = { Pickleball: 200, Badminton: 175 }
+const RACKET_RENTAL_PER_DAY = 100
+const SHUTTLECOCK_PRICE = 140
+const SPORTS = ['Pickleball', 'Badminton']
 
 const HOURS = [
   '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00',
@@ -31,12 +34,39 @@ const addDays = (days: number) => {
   return formatInputDate(date)
 }
 
-const initialBookings = [
-  { id: 'bk-101', user: 'mira', date: addDays(1), courtId: 1, time: '18:00', sport: 'Badminton', deposit: 175, status: 'confirmed', refundIssued: false },
-  { id: 'bk-102', user: 'leo', date: addDays(2), courtId: 3, time: '16:00', sport: 'Pickleball', deposit: 200, status: 'pending', refundIssued: false },
-  { id: 'bk-103', user: 'aisha', date: addDays(0), courtId: 5, time: '19:00', sport: 'Badminton', deposit: 175, status: 'confirmed', refundIssued: false },
-  { id: 'bk-104', user: 'niko', date: addDays(0), courtId: 2, time: '17:00', sport: 'Badminton', deposit: 175, status: 'pending', refundIssued: false },
-]
+type BookingSlot = { courtId: number; time: string }
+
+type Booking = {
+  id: string
+  user: string
+  date: string
+  courtId?: number | null
+  time?: string
+  times?: string[]
+  slots?: BookingSlot[]
+  sport: string
+  deposit: number
+  racketRental?: boolean
+  shuttlecockQuantity?: number
+  status: string
+  refundIssued: boolean
+}
+
+const bookingTimes = (booking: Booking) => booking.times ?? (booking.time ? [booking.time] : [])
+const bookingSlots = (booking: Booking): BookingSlot[] => booking.slots ?? (
+  booking.courtId == null ? [] : bookingTimes(booking).map((time) => ({ courtId: booking.courtId as number, time }))
+)
+const slotSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
+  .map((courtId) => `${COURTS.find((court) => court.id === courtId)?.name}: ${slots.filter((slot) => slot.courtId === courtId).map((slot) => slot.time).join(', ')}`)
+  .join(' · ')
+const courtSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
+  .map((courtId) => COURTS.find((court) => court.id === courtId)?.name)
+  .filter(Boolean)
+  .join(', ')
+const bookingAddOns = (booking: Booking) => [
+  booking.racketRental ? `Racket rental (PHP ${RACKET_RENTAL_PER_DAY}/day)` : null,
+  booking.shuttlecockQuantity ? `Shuttlecock ×${booking.shuttlecockQuantity} (PHP ${SHUTTLECOCK_PRICE} each)` : null,
+].filter(Boolean).join(' · ')
 
 const defaultAuth = {
   username: '',
@@ -45,26 +75,62 @@ const defaultAuth = {
   otp: '',
 }
 
+type AccountProfile = {
+  name: string
+  birthdate: string
+  phone: string
+  email: string
+}
+
+const emptyAccountProfile: AccountProfile = { name: '', birthdate: '', phone: '', email: '' }
+const profileFromAccount = (account: Partial<AccountProfile>): AccountProfile => ({
+  name: account.name || '',
+  birthdate: account.birthdate || '',
+  phone: account.phone || '',
+  email: account.email || '',
+})
+
 export function App() {
   const [currentUser, setCurrentUser] = useState<{ username: string; role: 'player' | 'admin' } | null>(null)
+  const [accountProfile, setAccountProfile] = useState(emptyAccountProfile)
+  const [isManagingAccount, setIsManagingAccount] = useState(false)
+  const [profileError, setProfileError] = useState('')
+  const [profileMessage, setProfileMessage] = useState('')
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [authRole, setAuthRole] = useState<'player' | 'admin'>('player')
+  const [registrationRole, setRegistrationRole] = useState<'player' | 'admin'>('player')
   const [authForm, setAuthForm] = useState(defaultAuth)
   const [showPassword, setShowPassword] = useState(false)
   const [otpSent, setOtpSent] = useState(false)
   const [otpMessage, setOtpMessage] = useState('')
   const [authError, setAuthError] = useState('')
-  const [bookings, setBookings] = useState(initialBookings)
+  const [authNotice, setAuthNotice] = useState('')
+  const [adminRequests, setAdminRequests] = useState<{ username: string; contact: string }[]>([])
+  const [adminCount, setAdminCount] = useState(0)
+  const [adminLimit, setAdminLimit] = useState(5)
+  const [adminRequestError, setAdminRequestError] = useState('')
+  const [bookings, setBookings] = useState<Booking[]>(() => {
+    try {
+      const savedBookings = window.localStorage.getItem('redcourt-bookings')
+      const parsedBookings = savedBookings ? JSON.parse(savedBookings) : []
+      return Array.isArray(parsedBookings) ? parsedBookings as Booking[] : []
+    } catch {
+      return []
+    }
+  })
   const [selectedDate, setSelectedDate] = useState(addDays(0))
-  const [selectedCourtId, setSelectedCourtId] = useState(1)
   const [selectedSport, setSelectedSport] = useState('Pickleball')
-  const [selectedTime, setSelectedTime] = useState('18:00')
+  const [preferredTime, setPreferredTime] = useState('18:00')
+  const [selectedSlots, setSelectedSlots] = useState<BookingSlot[]>([])
+  const [racketRental, setRacketRental] = useState(false)
+  const [shuttlecockQuantity, setShuttlecockQuantity] = useState(0)
   const [draftReservation, setDraftReservation] = useState<null | {
-    courtId: number
+    slots: BookingSlot[]
     date: string
-    time: string
     sport: string
     deposit: number
+    racketRental: boolean
+    shuttlecockQuantity: number
   }>(null)
 
   useEffect(() => {
@@ -72,28 +138,63 @@ export function App() {
     fetch('/api/auth/session')
       .then(async (response) => response.ok ? response.json() : null)
       .then((result) => {
-        if (active && result?.user) setCurrentUser(result.user)
+        if (active && result?.user) {
+          setCurrentUser(result.user)
+          setAccountProfile(profileFromAccount(result.user))
+        }
       })
       .catch(() => undefined)
 
     return () => { active = false }
   }, [])
 
-  const activeCourt = COURTS.find((court) => court.id === selectedCourtId) ?? COURTS[0]
-  const availableSports = activeCourt.sports
+  useEffect(() => {
+    if (currentUser?.role !== 'admin') {
+      setAdminRequests([])
+      return
+    }
 
-  const selectedCourtOptions = useMemo(() => (
-    COURTS.map((court) => ({ ...court, label: `${court.name} · ${court.sports.join(' / ')}` }))
-  ), [])
+    let active = true
+    fetch('/api/admin/requests')
+      .then(async (response) => {
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.error || 'Could not load admin requests.')
+        return result
+      })
+      .then((result) => {
+        if (!active) return
+        setAdminRequests(result.requests)
+        setAdminCount(result.activeAdminCount)
+        setAdminLimit(result.adminLimit)
+        setAdminRequestError('')
+      })
+      .catch((error) => {
+        if (active) setAdminRequestError(error instanceof Error ? error.message : 'Could not load admin requests.')
+      })
+
+    return () => { active = false }
+  }, [currentUser])
+
+  useEffect(() => {
+    window.localStorage.setItem('redcourt-bookings', JSON.stringify(bookings))
+  }, [bookings])
+
+  const hourlyRate = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES]
+  const racketRentalTotal = selectedSport === 'Badminton' && racketRental ? RACKET_RENTAL_PER_DAY : 0
+  const shuttlecockTotal = selectedSport === 'Badminton' ? shuttlecockQuantity * SHUTTLECOCK_PRICE : 0
+  const totalPayment = hourlyRate * selectedSlots.length + racketRentalTotal + shuttlecockTotal
+  const canReviewOrder = selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRental || shuttlecockQuantity > 0))
 
   const isSlotTaken = (courtId: number, date: string, time: string) =>
     bookings.some((booking) => (
-      booking.courtId === courtId &&
+      bookingSlots(booking).some((slot) => slot.courtId === courtId && slot.time === time) &&
       booking.date === date &&
-      booking.time === time &&
       booking.status !== 'cancelled' &&
       booking.status !== 'rejected'
     ))
+
+  const availableCourts = COURTS.filter((court) => court.sports.includes(selectedSport))
+  const preferredTimeCourts = availableCourts.filter((court) => !isSlotTaken(court.id, selectedDate, preferredTime))
 
   const generateOtp = async () => {
     setOtpSent(false)
@@ -116,11 +217,19 @@ export function App() {
   const changeAuthMode = (mode: 'login' | 'signup') => {
     setAuthMode(mode)
     if (mode === 'signup') setAuthRole('player')
+    setRegistrationRole('player')
     setAuthForm(defaultAuth)
     setShowPassword(false)
     setOtpSent(false)
     setOtpMessage('')
     setAuthError('')
+    setAuthNotice('')
+  }
+
+  const toggleAuthRole = () => {
+    const nextRole = authRole === 'player' ? 'admin' : 'player'
+    changeAuthMode('login')
+    setAuthRole(nextRole)
   }
 
   const handleAuthSubmit = async (event: Event) => {
@@ -137,6 +246,7 @@ export function App() {
     }
 
     setAuthError('')
+    setAuthNotice('')
     try {
       const endpoint = authMode === 'signup' ? 'register' : 'login'
       const response = await fetch(`/api/auth/${endpoint}`, {
@@ -146,13 +256,21 @@ export function App() {
           username: authForm.username,
           password: authForm.password,
           ...(authMode === 'signup'
-            ? { contact: authForm.contact, otp: authForm.otp }
+            ? { contact: authForm.contact, otp: authForm.otp, role: registrationRole }
             : { role: authRole }),
         }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Authentication failed.')
+      if (result.pendingApproval) {
+        setAuthForm(defaultAuth)
+        setOtpSent(false)
+        setOtpMessage('')
+        setAuthNotice(result.message)
+        return
+      }
       setCurrentUser(result.user)
+      setAccountProfile(profileFromAccount(result.user))
       setAuthForm(defaultAuth)
       setOtpSent(false)
       setOtpMessage('')
@@ -164,6 +282,26 @@ export function App() {
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     setCurrentUser(null)
+    setIsManagingAccount(false)
+  }
+
+  const handleProfileSave = async (event: Event) => {
+    event.preventDefault()
+    setProfileError('')
+    setProfileMessage('')
+    try {
+      const response = await fetch('/api/account/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(accountProfile),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Could not save account details.')
+      setAccountProfile(profileFromAccount(result.user))
+      setProfileMessage('Account details saved.')
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : 'Could not save account details.')
+    }
   }
 
   const handleBookingReview = () => {
@@ -171,29 +309,43 @@ export function App() {
       window.alert('Log in as a player to reserve a court.')
       return
     }
+    const slots = [...selectedSlots].sort((left, right) => (
+      left.courtId - right.courtId || HOURS.indexOf(left.time) - HOURS.indexOf(right.time)
+    ))
+    const bookingRacketRental = selectedSport === 'Badminton' && racketRental
+    const bookingShuttlecockQuantity = selectedSport === 'Badminton' ? shuttlecockQuantity : 0
+    const equipmentOnly = slots.length === 0 && (bookingRacketRental || bookingShuttlecockQuantity > 0)
 
-    if (isSlotTaken(selectedCourtId, selectedDate, selectedTime)) {
-      window.alert('This time slot is already booked. Please choose another one.')
+    if (slots.length === 0 && !equipmentOnly) {
+      window.alert('Select an available time or a badminton add-on.')
+      return
+    }
+    if (slots.some((slot) => isSlotTaken(slot.courtId, selectedDate, slot.time))) {
+      window.alert('One or more selected time slots are already booked. Please update your selection.')
       return
     }
 
-    const deposit = DEPOSITS[selectedSport as keyof typeof DEPOSITS]
+    const deposit = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES] * slots.length
+      + (bookingRacketRental ? RACKET_RENTAL_PER_DAY : 0)
+      + bookingShuttlecockQuantity * SHUTTLECOCK_PRICE
 
     setDraftReservation({
-      courtId: selectedCourtId,
+      slots,
       date: selectedDate,
-      time: selectedTime,
       sport: selectedSport,
       deposit,
+      racketRental: bookingRacketRental,
+      shuttlecockQuantity: bookingShuttlecockQuantity,
     })
   }
 
   const confirmDeposit = () => {
     if (!draftReservation || !currentUser) return
 
-    if (isSlotTaken(draftReservation.courtId, draftReservation.date, draftReservation.time)) {
+    if (draftReservation.slots.some((slot) => isSlotTaken(slot.courtId, draftReservation.date, slot.time))) {
       setDraftReservation(null)
-      window.alert('This time slot was just booked. Please choose another one.')
+      setSelectedSlots([])
+      window.alert('One or more selected time slots were just booked. Please choose another time.')
       return
     }
 
@@ -201,15 +353,19 @@ export function App() {
       id: `bk-${Date.now()}`,
       user: currentUser.username,
       date: draftReservation.date,
-      courtId: draftReservation.courtId,
-      time: draftReservation.time,
+      slots: draftReservation.slots,
       sport: draftReservation.sport,
       deposit: draftReservation.deposit,
+      racketRental: draftReservation.racketRental,
+      shuttlecockQuantity: draftReservation.shuttlecockQuantity,
       status: 'pending',
       refundIssued: false,
     }
 
     setBookings((previous) => [newReservation, ...previous])
+    setSelectedSlots([])
+    setRacketRental(false)
+    setShuttlecockQuantity(0)
     setDraftReservation(null)
     window.alert('Your downpayment has been recorded. Your reservation is pending admin approval.')
   }
@@ -220,7 +376,29 @@ export function App() {
     ))
   }
 
+  const sendReservationConfirmation = async (booking: Booking) => {
+    const slots = bookingSlots(booking)
+    if (slots.length === 0) return
+
+    try {
+      const response = await fetch('/api/admin/reservations/confirmed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: booking.user, date: booking.date, slots }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'SMS delivery failed.')
+      window.alert(`Reservation confirmed. SMS sent to the number ending in ${result.phoneLastFour}.`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'SMS delivery failed.'
+      window.alert(`Reservation status saved, but the SMS was not sent: ${message}`)
+    }
+  }
+
   const handleAdminAction = (bookingId: string, action: 'confirm' | 'reject') => {
+    const selectedBooking = bookings.find((booking) => booking.id === bookingId)
+    if (!selectedBooking) return
+
     setBookings((previous) => previous.map((booking) => {
       if (booking.id !== bookingId) return booking
 
@@ -234,6 +412,21 @@ export function App() {
         refundIssued: true,
       }
     }))
+
+    if (action === 'confirm') void sendReservationConfirmation(selectedBooking)
+  }
+
+  const handleAdminRequest = async (username: string, action: 'approve' | 'reject') => {
+    setAdminRequestError('')
+    try {
+      const response = await fetch(`/api/admin/requests/${encodeURIComponent(username)}/${action}`, { method: 'POST' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Could not update admin request.')
+      setAdminRequests((previous) => previous.filter((request) => request.username !== username))
+      setAdminCount(result.activeAdminCount)
+    } catch (error) {
+      setAdminRequestError(error instanceof Error ? error.message : 'Could not update admin request.')
+    }
   }
 
   const myReservations = currentUser
@@ -253,27 +446,91 @@ export function App() {
           {currentUser ? (
             <>
               <span className="user-badge">{currentUser.username} · {currentUser.role}</span>
+              <button className="secondary" onClick={() => {
+                setIsManagingAccount((open) => !open)
+                setProfileError('')
+                setProfileMessage('')
+              }}>{isManagingAccount ? 'Back to dashboard' : 'Manage Account'}</button>
               <button className="secondary" onClick={handleLogout}>Logout</button>
             </>
           ) : (
             <>
-              <button className={authMode === 'login' ? 'primary' : 'secondary'} onClick={() => changeAuthMode('login')}>Player Login</button>
+              <button className={authMode === 'login' ? 'primary' : 'secondary'} onClick={toggleAuthRole}>{authRole === 'player' ? 'Admin Log In' : 'Player Log In'}</button>
               <button className={authMode === 'signup' ? 'primary' : 'secondary'} onClick={() => changeAuthMode('signup')}>Create Account</button>
             </>
           )}
         </div>
       </header>
 
-      {!currentUser ? (
+      {currentUser && isManagingAccount ? (
+        <main className="profile-layout">
+          <section className="panel profile-panel">
+            <h2>Manage account</h2>
+            <p className="muted">Update the personal details saved with your account.</p>
+            <form className="auth-form" onSubmit={handleProfileSave}>
+              <label>
+                Name
+                <input
+                  type="text"
+                  autoComplete="name"
+                  required
+                  minLength={2}
+                  maxLength={100}
+                  value={accountProfile.name}
+                  onInput={(e) => setAccountProfile({ ...accountProfile, name: (e.target as HTMLInputElement).value })}
+                />
+              </label>
+              <label>
+                Birthdate
+                <input
+                  type="date"
+                  autoComplete="bday"
+                  required
+                  max={addDays(0)}
+                  value={accountProfile.birthdate}
+                  onInput={(e) => setAccountProfile({ ...accountProfile, birthdate: (e.target as HTMLInputElement).value })}
+                />
+              </label>
+              <label>
+                Contact number
+                <input
+                  type="tel"
+                  autoComplete="tel"
+                  required
+                  value={accountProfile.phone}
+                  onInput={(e) => setAccountProfile({ ...accountProfile, phone: (e.target as HTMLInputElement).value })}
+                />
+              </label>
+              <label>
+                Email address
+                <input
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={accountProfile.email}
+                  onInput={(e) => setAccountProfile({ ...accountProfile, email: (e.target as HTMLInputElement).value })}
+                />
+              </label>
+              {profileError ? <p className="auth-error" role="alert">{profileError}</p> : null}
+              {profileMessage ? <p className="auth-notice" role="status">{profileMessage}</p> : null}
+              <button type="submit" className="primary wide">Save account details</button>
+            </form>
+          </section>
+        </main>
+      ) : !currentUser ? (
         <main className="auth-layout">
           <section className="auth-panel">
-            <h2>{authMode === 'login' ? `${authRole === 'admin' ? 'Admin' : 'Player'} login` : 'Create account'}</h2>
-            <p>{authMode === 'login' ? 'Log in with your username and password.' : 'Create an account with your username, password and verified contact.'}</p>
+            <h2>{authMode === 'login' ? `${authRole === 'admin' ? 'Admin' : 'Player'} login` : registrationRole === 'admin' ? 'Request admin account' : 'Create account'}</h2>
+            <p>{authMode === 'login'
+              ? 'Log in with your username and password.'
+              : registrationRole === 'admin'
+                ? `Admin requests need approval from an existing admin. The limit is ${adminLimit} admin accounts.`
+                : 'Create an account with your username, password and verified contact.'}</p>
 
-            {authMode === 'login' && (
+            {authMode === 'signup' && (
               <div className="role-switch" aria-label="Account type">
-                <button type="button" className={authRole === 'player' ? 'primary' : 'secondary'} onClick={() => setAuthRole('player')}>Player</button>
-                <button type="button" className={authRole === 'admin' ? 'primary' : 'secondary'} onClick={() => setAuthRole('admin')}>Admin</button>
+                <button type="button" className={registrationRole === 'player' ? 'primary' : 'secondary'} onClick={() => setRegistrationRole('player')}>Player Account</button>
+                <button type="button" className={registrationRole === 'admin' ? 'primary' : 'secondary'} onClick={() => setRegistrationRole('admin')}>Request Admin</button>
               </div>
             )}
 
@@ -338,6 +595,7 @@ export function App() {
               )}
 
               {authError ? <p className="auth-error" role="alert">{authError}</p> : null}
+              {authNotice ? <p className="auth-notice" role="status">{authNotice}</p> : null}
 
               <button type="submit" className="primary wide">{authMode === 'login' ? 'Login' : 'Create account'}</button>
             </form>
@@ -349,7 +607,7 @@ export function App() {
               <li>Courts 1-3 support Pickleball and Badminton.</li>
               <li>Courts 4-9 are Badminton only.</li>
               <li>Occupied time slots are disabled in this booking view.</li>
-              <li>Downpayment: PHP 200 for Pickleball and PHP 175 for Badminton.</li>
+              <li>Hourly rate: PHP 200 for Pickleball and PHP 175 for Badminton.</li>
               <li>Admin can confirm or reject bookings and refund for rejected reservations.</li>
             </ul>
           </aside>
@@ -395,8 +653,9 @@ export function App() {
                 <div key={booking.id} className="reservation-card">
                   <div>
                     <p className="muted">{booking.user}</p>
-                    <h3>{COURTS.find((court) => court.id === booking.courtId)?.name}</h3>
-                    <p>{booking.date} · {booking.time} · {booking.sport}</p>
+                    <h3>{courtSummary(bookingSlots(booking)) || 'Equipment only'}</h3>
+                    <p>{booking.date}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
+                    {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
                     <p className="status status--pending">Status: {booking.status}</p>
                   </div>
 
@@ -408,81 +667,207 @@ export function App() {
                       </>
                     )}
                     {booking.status === 'confirmed' && (
-                      <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
+                      <>
+                        {bookingSlots(booking).length > 0 ? (
+                          <button className="secondary" onClick={() => void sendReservationConfirmation(booking)}>Resend confirmation SMS</button>
+                        ) : null}
+                        <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
+                      </>
                     )}
                   </div>
                 </div>
               ))}
             </div>
           </section>
+
+          <section className="panel admin-requests-panel">
+            <div className="panel-header">
+              <h2>Admin account requests</h2>
+              <span className="muted">{adminCount}/{adminLimit} accounts</span>
+            </div>
+            {adminRequestError ? <p className="auth-error" role="alert">{adminRequestError}</p> : null}
+            {adminCount >= adminLimit && adminRequests.length > 0
+              ? <p className="auth-error" role="status">The admin account limit has been reached. Requests cannot be approved.</p>
+              : null}
+            {adminRequests.length === 0 ? (
+              <p className="muted">No admin account requests pending.</p>
+            ) : (
+              <div className="reservation-list">
+                {adminRequests.map((request) => (
+                  <div key={request.username} className="reservation-card">
+                    <div>
+                      <h3>{request.username}</h3>
+                      <p className="muted">{request.contact}</p>
+                    </div>
+                    <div className="reservation-actions">
+                      <button className="primary" disabled={adminCount >= adminLimit} onClick={() => handleAdminRequest(request.username, 'approve')}>Approve</button>
+                      <button className="secondary danger" onClick={() => handleAdminRequest(request.username, 'reject')}>Reject</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </main>
       ) : (
         <main className="dashboard player-dashboard">
           <section className="panel booking-panel">
             <div className="panel-header">
-              <h2>Book a court</h2>
-              <label>
-                Date
-                <input type="date" value={selectedDate} onInput={(e) => setSelectedDate((e.target as HTMLInputElement).value)} />
-              </label>
+              <div>
+                <h2>Book a court</h2>
+                <span className="muted">Availability for {selectedDate}</span>
+              </div>
             </div>
 
-            <div className="booking-form-grid">
-              <label>
-                Court
-                <select value={selectedCourtId} onChange={(e) => {
-                  const nextCourt = Number((e.target as HTMLSelectElement).value)
-                  const chosen = COURTS.find((court) => court.id === nextCourt) ?? COURTS[0]
-                  setSelectedCourtId(nextCourt)
-                  setSelectedSport(chosen.sports.includes(selectedSport) ? selectedSport : chosen.sports[0])
-                }}>
-                  {selectedCourtOptions.map((court) => (
-                    <option value={court.id} key={court.id}>{court.label}</option>
+            <label className="sport-filter">
+              Sport
+              <select value={selectedSport} onChange={(e) => {
+                const sport = (e.target as HTMLSelectElement).value
+                setSelectedSport(sport)
+                setSelectedSlots([])
+                if (sport !== 'Badminton') {
+                  setRacketRental(false)
+                  setShuttlecockQuantity(0)
+                }
+              }}>
+                {SPORTS.map((sport) => (
+                  <option value={sport} key={sport}>{sport}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="booking-date-picker">
+              Day
+              <input type="date" value={selectedDate} onInput={(e) => {
+                setSelectedDate((e.target as HTMLInputElement).value)
+                setSelectedSlots([])
+              }} />
+            </label>
+
+            <section className="availability-results" aria-live="polite">
+              <div className="panel-header">
+                <h3>Courts and available times</h3>
+                <span className="muted">Select hours across courts</span>
+              </div>
+              {availableCourts.length === 0 ? (
+                <p className="empty-state">No courts offer {selectedSport.toLowerCase()}.</p>
+              ) : (
+                <div className="court-grid">
+                  {availableCourts.map((court) => {
+                    const freeTimes = HOURS.filter((time) => !isSlotTaken(court.id, selectedDate, time))
+                    return (
+                      <section key={court.id} className={`court-card schedule-court${selectedSlots.some((slot) => slot.courtId === court.id) ? ' selected' : ''}`}>
+                        <div className="schedule-court-heading">
+                          <h3>{court.name}</h3>
+                          <span>{freeTimes.length} free</span>
+                        </div>
+                        <div className="court-time-list">
+                          {HOURS.map((time) => {
+                            const occupied = isSlotTaken(court.id, selectedDate, time)
+                            const selected = selectedSlots.some((slot) => slot.courtId === court.id && slot.time === time)
+                            return (
+                              <label key={time} className={`time-slot${selected ? ' selected' : ''}${occupied ? ' occupied' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  disabled={occupied}
+                                  onChange={() => {
+                                    if (selected) {
+                                      setSelectedSlots((previous) => previous.filter((slot) => !(slot.courtId === court.id && slot.time === time)))
+                                    } else {
+                                      setSelectedSlots((previous) => [...previous, { courtId: court.id, time }])
+                                    }
+                                  }}
+                                />
+                                <span>{time}</span>
+                                {occupied ? <span className="slot-unavailable">Booked</span> : null}
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </section>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
+
+            <details className="preferred-time-search">
+              <summary>Select preferred time</summary>
+              <div className="booking-form-grid">
+                <label>
+                  Preferred time
+                  <select value={preferredTime} onChange={(e) => setPreferredTime((e.target as HTMLSelectElement).value)}>
+                    {HOURS.map((time) => <option value={time} key={time}>{time}</option>)}
+                  </select>
+                </label>
+              </div>
+              <p className="muted">Courts free at {preferredTime} on {selectedDate}</p>
+              {preferredTimeCourts.length === 0 ? (
+                <p className="empty-state">No courts are available at that time.</p>
+              ) : (
+                <div className="preferred-court-list">
+                  {preferredTimeCourts.map((court) => (
+                    <button
+                      type="button"
+                      key={court.id}
+                      className="secondary"
+                      onClick={() => {
+                        setSelectedSlots((previous) => previous.some((slot) => slot.courtId === court.id && slot.time === preferredTime)
+                          ? previous
+                          : [...previous, { courtId: court.id, time: preferredTime }])
+                      }}
+                    >
+                      {court.name}
+                    </button>
                   ))}
-                </select>
-              </label>
+                </div>
+              )}
+            </details>
 
-              <label>
-                Sport
-                <select value={selectedSport} onChange={(e) => setSelectedSport((e.target as HTMLSelectElement).value)}>
-                  {availableSports.map((sport) => (
-                    <option value={sport} key={sport}>{sport}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="time-grid">
-              {HOURS.map((time) => {
-                const occupied = isSlotTaken(selectedCourtId, selectedDate, time)
-                const selected = selectedTime === time
-
-                return (
-                  <button
-                    type="button"
-                    key={time}
-                    className={selected ? 'time-slot selected' : occupied ? 'time-slot occupied' : 'time-slot'}
-                    disabled={occupied}
-                    onClick={() => setSelectedTime(time)}
-                  >
-                    {time}
-                  </button>
-                )
-              })}
-            </div>
+            {selectedSport === 'Badminton' ? (
+              <section className="addon-options">
+                <h3>Optional badminton add-ons</h3>
+                <label className="addon-checkbox">
+                  <input type="checkbox" checked={racketRental} onChange={(e) => setRacketRental((e.target as HTMLInputElement).checked)} />
+                  <span>
+                    <strong>Rent a racket</strong>
+                    <small>PHP {RACKET_RENTAL_PER_DAY} per day</small>
+                  </span>
+                </label>
+                <label className="addon-quantity">
+                  <span>
+                    <strong>Shuttlecocks</strong>
+                    <small>PHP {SHUTTLECOCK_PRICE} each</small>
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={shuttlecockQuantity}
+                    aria-label="Shuttlecock quantity"
+                    onInput={(e) => setShuttlecockQuantity(Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0)))}
+                  />
+                </label>
+              </section>
+            ) : null}
 
             <div className="booking-summary">
               <div>
-                <span>Selected court</span>
-                <strong>{activeCourt.name}</strong>
+                <span>Selected courts</span>
+                <strong>{courtSummary(selectedSlots) || (racketRental || shuttlecockQuantity > 0 ? 'Equipment only' : 'Not selected')}</strong>
               </div>
               <div>
-                <span>Downpayment</span>
-                <strong>PHP {DEPOSITS[selectedSport as keyof typeof DEPOSITS].toFixed(2)}</strong>
+                <span>Selected court-hours</span>
+                <strong>{selectedSlots.length}</strong>
+              </div>
+              <div>
+                <span>Total payment · PHP {hourlyRate}/hour</span>
+                <strong>PHP {totalPayment.toFixed(2)}</strong>
               </div>
             </div>
 
-            <button type="button" className="primary wide" onClick={handleBookingReview}>Review payment</button>
+            <button type="button" className="primary wide" disabled={!(selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRental || shuttlecockQuantity > 0)))} onClick={handleBookingReview}>Review order</button>
           </section>
 
           <section className="panel">
@@ -497,9 +882,10 @@ export function App() {
                 myReservations.map((booking) => (
                   <div key={booking.id} className="reservation-card">
                     <div>
-                      <p className="muted">{COURTS.find((court) => court.id === booking.courtId)?.name}</p>
+                      <p className="muted">{courtSummary(bookingSlots(booking)) || 'Equipment only'}</p>
                       <h3>{booking.sport}</h3>
-                      <p>{booking.date} · {booking.time}</p>
+                      <p>{booking.date}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''}</p>
+                      {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
                       <p className="status">Status: {booking.status}</p>
                     </div>
 
@@ -507,7 +893,7 @@ export function App() {
                       {booking.status === 'pending' || booking.status === 'confirmed' ? (
                         <button className="secondary danger" onClick={() => cancelUserBooking(booking.id)}>Cancel</button>
                       ) : null}
-                      <span className="deposit-tag">Downpayment PHP {booking.deposit.toFixed(2)}</span>
+                      <span className="deposit-tag">Total PHP {booking.deposit.toFixed(2)}</span>
                     </div>
                   </div>
                 ))
@@ -518,26 +904,55 @@ export function App() {
           {draftReservation && (
             <aside className="payment-panel panel">
               <h2>Payment</h2>
-              <p>Downpayment to reserve the court.</p>
+              {draftReservation.slots.length > 0
+                ? <p>Hourly rate: PHP {HOURLY_RATES[draftReservation.sport as keyof typeof HOURLY_RATES]} per hour.</p>
+                : <p>Equipment-only order; no court booking included.</p>}
               <div className="payment-summary">
-                <span>Court</span>
-                <strong>{COURTS.find((court) => court.id === draftReservation.courtId)?.name}</strong>
+                <span>Courts</span>
+                <strong>{courtSummary(draftReservation.slots) || 'Equipment only'}</strong>
                 <span>Sport</span>
                 <strong>{draftReservation.sport}</strong>
-                <span>Date & time</span>
-                <strong>{draftReservation.date} · {draftReservation.time}</strong>
-                <span>Downpayment due</span>
+                <span>{draftReservation.slots.length > 0 ? 'Date & time' : 'Rental date'}</span>
+                <strong>{draftReservation.date}{draftReservation.slots.length > 0 ? ` · ${slotSummary(draftReservation.slots)}` : ''}</strong>
+                {draftReservation.slots.length > 0 ? (
+                  <>
+                    <span>Selected court-hours</span>
+                    <strong>{draftReservation.slots.length}</strong>
+                  </>
+                ) : null}
+                {draftReservation.racketRental ? (
+                  <>
+                    <span>Racket rental</span>
+                    <strong>PHP {RACKET_RENTAL_PER_DAY.toFixed(2)} / day</strong>
+                  </>
+                ) : null}
+                {draftReservation.shuttlecockQuantity > 0 ? (
+                  <>
+                    <span>Shuttlecocks ×{draftReservation.shuttlecockQuantity}</span>
+                    <strong>PHP {(draftReservation.shuttlecockQuantity * SHUTTLECOCK_PRICE).toFixed(2)}</strong>
+                  </>
+                ) : null}
+                <span>Total payment due</span>
                 <strong>PHP {draftReservation.deposit.toFixed(2)}</strong>
               </div>
 
               <div className="payment-buttons">
-                <button className="primary" onClick={confirmDeposit}>Pay deposit</button>
+                <button className="primary" onClick={confirmDeposit}>Pay total</button>
                 <button className="secondary" onClick={() => setDraftReservation(null)}>Cancel</button>
               </div>
             </aside>
           )}
         </main>
       )}
+      {canReviewOrder && !draftReservation ? (
+        <div className="quick-booking-bar" role="region" aria-label="Booking total">
+          <div className="quick-booking-total" aria-live="polite">
+            <span>{selectedSlots.length} court-hour{selectedSlots.length === 1 ? '' : 's'} selected</span>
+            <strong>Total PHP {totalPayment.toFixed(2)}</strong>
+          </div>
+          <button type="button" className="primary" onClick={handleBookingReview}>Review payment</button>
+        </div>
+      ) : null}
     </div>
   )
 }

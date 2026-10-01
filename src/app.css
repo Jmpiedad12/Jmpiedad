@@ -74,6 +74,15 @@ button:disabled {
   gap: 1.5rem;
 }
 
+.profile-layout {
+  width: min(100%, 760px);
+  margin: 0 auto;
+}
+
+.profile-panel h2 {
+  margin-top: 0;
+}
+
 .auth-layout {
   grid-template-columns: 1.3fr 0.7fr;
 }
@@ -215,6 +224,12 @@ select {
   font-size: 0.9rem;
 }
 
+.auth-notice {
+  margin: 0;
+  color: #bbf7d0;
+  font-size: 0.9rem;
+}
+
 .primary,
 .secondary {
   display: inline-flex;
@@ -265,6 +280,49 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.sport-filter {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 18rem;
+  margin-bottom: 1.25rem;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.booking-date-picker {
+  display: grid;
+  gap: 0.5rem;
+  width: min(18rem, 100%);
+  margin-bottom: 1.25rem;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.preferred-time-search {
+  margin: 1.25rem 0;
+  padding: 0.75rem 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.preferred-time-search summary {
+  width: fit-content;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.preferred-time-search .booking-form-grid {
+  margin-top: 1rem;
+}
+
+.preferred-court-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
 .time-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -272,12 +330,58 @@ select {
   margin: 1.2rem 0;
 }
 
+.court-time-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+}
+
+.schedule-court.selected {
+  border-color: rgba(248, 113, 113, 0.75);
+}
+
+.schedule-court-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.schedule-court-heading h3 {
+  margin: 0;
+}
+
+.schedule-court-heading span {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.court-time-list .time-slot {
+  min-height: 38px;
+  gap: 0.4rem;
+  padding: 0.45rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
 .time-slot {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 48px;
   background: rgba(30, 41, 59, 0.95);
   color: #e2e8f0;
   padding: 0.8rem 0.6rem;
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.time-slot input {
+  width: auto;
+  margin: 0;
+  padding: 0;
+  accent-color: #dc2626;
 }
 
 .time-slot.selected {
@@ -289,6 +393,55 @@ select {
 .time-slot.occupied {
   background: rgba(127, 29, 29, 0.8);
   color: #fecaca;
+}
+
+.slot-unavailable {
+  margin-left: auto;
+  font-size: 0.72rem;
+}
+
+.addon-options {
+  display: grid;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.65);
+}
+
+.addon-options h3 {
+  margin: 0;
+}
+
+.addon-checkbox,
+.addon-quantity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #e2e8f0;
+}
+
+.addon-checkbox input {
+  width: auto;
+  margin: 0;
+  accent-color: #dc2626;
+}
+
+.addon-checkbox span,
+.addon-quantity span {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.addon-checkbox small,
+.addon-quantity small {
+  color: #94a3b8;
+}
+
+.addon-quantity input {
+  width: 6rem;
 }
 
 .booking-summary {
@@ -331,9 +484,55 @@ select {
   gap: 0.8rem;
 }
 
+.quick-booking-bar {
+  position: fixed;
+  z-index: 30;
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  left: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: min(1200px, calc(100vw - 2rem));
+  box-sizing: border-box;
+  padding: 0.8rem 1rem;
+  transform: translateX(-50%);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.97);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
+.quick-booking-total {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.quick-booking-total span {
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
+.quick-booking-total strong {
+  color: #f8fafc;
+  font-size: 1.1rem;
+}
+
+.quick-booking-bar button {
+  white-space: nowrap;
+}
+
+.redcourt-app:has(.quick-booking-bar) {
+  padding-bottom: 7rem;
+}
+
 .reservation-list {
   display: grid;
   gap: 0.9rem;
+}
+
+.admin-requests-panel {
+  grid-column: 1 / -1;
 }
 
 .reservation-card {
@@ -398,6 +597,38 @@ select {
   margin: 0 0 0.3rem;
 }
 
+.court-option {
+  display: grid;
+  gap: 0.35rem;
+  width: 100%;
+  min-height: 76px;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.8);
+  color: #f1f5f9;
+  text-align: left;
+}
+
+.court-option span {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.court-option.selected {
+  border-color: #f87171;
+  background: rgba(127, 29, 29, 0.55);
+}
+
+.court-option:focus-visible {
+  outline: 2px solid #fbbf24;
+  outline-offset: 2px;
+}
+
+.schedule-selection-header {
+  margin-top: 1.4rem;
+}
+
 .slot-list {
   display: flex;
   flex-wrap: wrap;
@@ -439,11 +670,30 @@ select {
   .time-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .court-time-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 600px) {
   .redcourt-app {
     padding: 1rem;
+  }
+
+  .redcourt-app:has(.quick-booking-bar) {
+    padding-bottom: 8rem;
+  }
+
+  .quick-booking-bar {
+    bottom: max(0.5rem, env(safe-area-inset-bottom));
+    gap: 0.5rem;
+    width: calc(100vw - 1rem);
+    padding: 0.65rem;
+  }
+
+  .quick-booking-bar button {
+    padding: 0.7rem 0.8rem;
   }
 
   .topbar {
