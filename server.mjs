@@ -9,6 +9,22 @@ const OTP_DURATION = 10 * 60 * 1000
 const ADMIN_LIMIT = 5
 const DATA_DIRECTORY = path.join(process.cwd(), '.redcourt-data')
 const ACCOUNTS_PATH = path.join(DATA_DIRECTORY, 'accounts.json')
+const BOOKINGS_PATH = path.join(DATA_DIRECTORY, 'bookings.json')
+const HOURLY_RATES = { Pickleball: 200, Badminton: 175 }
+const RACKET_RENTAL_PER_DAY = 100
+const SHUTTLECOCK_PRICE = 140
+const COURT_SPORTS = {
+  1: ['Pickleball', 'Badminton'],
+  2: ['Pickleball', 'Badminton'],
+  3: ['Pickleball', 'Badminton'],
+  4: ['Badminton'],
+  5: ['Badminton'],
+  6: ['Badminton'],
+  7: ['Badminton'],
+  8: ['Badminton'],
+  9: ['Badminton'],
+}
+const BOOKING_TIMES = new Set(Array.from({ length: 14 }, (_, index) => `${String(index + 8).padStart(2, '0')}:00`))
 const sessions = new Map()
 const pendingOtps = new Map()
 const authAttempts = new Map()
@@ -16,14 +32,47 @@ const otpAttempts = new Map()
 
 mkdirSync(DATA_DIRECTORY, { recursive: true })
 if (!existsSync(ACCOUNTS_PATH)) writeFileSync(ACCOUNTS_PATH, '[]\n', { flag: 'wx' })
+if (!existsSync(BOOKINGS_PATH)) writeFileSync(BOOKINGS_PATH, '[]\n', { flag: 'wx' })
 
 const readAccounts = () => JSON.parse(readFileSync(ACCOUNTS_PATH, 'utf8'))
+const readBookings = () => JSON.parse(readFileSync(BOOKINGS_PATH, 'utf8'))
 
 const saveAccounts = (accounts) => {
   const temporaryPath = `${ACCOUNTS_PATH}.tmp`
   writeFileSync(temporaryPath, `${JSON.stringify(accounts, null, 2)}\n`, { mode: 0o600 })
   renameSync(temporaryPath, ACCOUNTS_PATH)
 }
+
+const saveBookings = (bookings) => {
+  const temporaryPath = `${BOOKINGS_PATH}.tmp`
+  writeFileSync(temporaryPath, `${JSON.stringify(bookings, null, 2)}\n`, { mode: 0o600 })
+  renameSync(temporaryPath, BOOKINGS_PATH)
+}
+
+const bookingSlots = (booking) => booking.slots ?? (
+  booking.courtId == null
+    ? []
+    : (booking.times ?? (booking.time ? [booking.time] : [])).map((time) => ({ courtId: booking.courtId, time }))
+)
+
+const validBookingSlots = (slots, sport, allowEmpty = false) => (
+  Array.isArray(slots) && slots.length <= 36 && (allowEmpty || slots.length > 0) &&
+  slots.every((slot) => (
+    Number.isInteger(slot?.courtId) && COURT_SPORTS[slot.courtId]?.includes(sport) &&
+    BOOKING_TIMES.has(slot.time)
+  )) && new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length
+)
+
+const hasBookingConflict = (bookings, date, slots, ignoreId = null) => bookings.some((booking) => (
+  booking.id !== ignoreId && booking.date === date && ['pending', 'confirmed'].includes(booking.status) &&
+  bookingSlots(booking).some((existingSlot) => slots.some((slot) => (
+    slot.courtId === existingSlot.courtId && slot.time === existingSlot.time
+  )))
+))
+
+const validBookingDate = (date) => (
+  /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+)
 
 const hashPassword = (password, salt = randomBytes(16).toString('hex')) => ({
   salt,
@@ -206,6 +255,155 @@ const server = createServer(async (request, response) => {
   const route = `${request.method} ${url.pathname}`
 
   try {
+    if (route === 'GET /api/bookings') {
+      const session = readSession(request)
+      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to view reservations.' })
+      const bookings = readBookings()
+      return sendJson(response, 200, {
+        bookings: session.account.role === 'admin'
+          ? bookings
+          : bookings.map((booking) => booking.user === session.account.username ? booking : { ...booking, user: '' }),
+      })
+    }
+
+    if (route === 'POST /api/bookings') {
+      const session = readSession(request)
+      if (!session?.account) return sendJson(response, 401, { error: 'Your session expired. Please sign in again as a player.' })
+      if (session.account.role !== 'player') return sendJson(response, 403, { error: 'A player account is required to reserve court times.' })
+      const account = session.account
+      if (![account.name, account.birthdate, account.phone || account.contact, account.email].every((value) => value?.trim())) {
+        return sendJson(response, 400, { error: 'Complete your personal information before booking a court.' })
+      }
+
+      const body = await readBody(request)
+      const date = String(body.date || '')
+      const sport = String(body.sport || '')
+      const slots = Array.isArray(body.slots) ? body.slots : []
+      const racketRental = body.racketRental === true
+      const shuttlecockQuantity = Number(body.shuttlecockQuantity || 0)
+      const equipmentOnly = slots.length === 0 && (racketRental || shuttlecockQuantity > 0)
+      if (!validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !validBookingSlots(slots, sport, true)) {
+        return sendJson(response, 400, { error: 'Reservation date, sport, or time slots are invalid.' })
+      }
+      if (!Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100) {
+        return sendJson(response, 400, { error: 'Shuttlecock quantity must be between 0 and 100.' })
+      }
+      if ((racketRental || shuttlecockQuantity > 0) && sport !== 'Badminton') {
+        return sendJson(response, 400, { error: 'Racket rental and shuttlecocks are only available for Badminton.' })
+      }
+      if (slots.length === 0 && !equipmentOnly) {
+        return sendJson(response, 400, { error: 'Select a court time or a badminton add-on.' })
+      }
+
+      const bookings = readBookings()
+      if (hasBookingConflict(bookings, date, slots)) {
+        return sendJson(response, 409, { error: 'One or more selected court times were just reserved. Refresh availability and choose another slot.' })
+      }
+
+      const booking = {
+        id: randomBytes(12).toString('hex'),
+        user: account.username,
+        date,
+        slots,
+        sport,
+        deposit: HOURLY_RATES[sport] * slots.length
+          + (racketRental ? RACKET_RENTAL_PER_DAY : 0)
+          + shuttlecockQuantity * SHUTTLECOCK_PRICE,
+        racketRental,
+        shuttlecockQuantity,
+        status: 'pending',
+        refundIssued: false,
+      }
+      bookings.unshift(booking)
+      saveBookings(bookings)
+      return sendJson(response, 201, { booking })
+    }
+
+    if (route === 'POST /api/bookings/import-legacy') {
+      const session = readSession(request)
+      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const body = await readBody(request)
+      const legacyBookings = Array.isArray(body.bookings) ? body.bookings.slice(0, 1000) : []
+      const accounts = readAccounts().filter((account) => account.role === 'player')
+      const bookings = readBookings()
+      const existingIds = new Set(bookings.map((booking) => booking.id))
+      let imported = 0
+      let skippedConflicts = 0
+
+      for (const legacy of legacyBookings) {
+        if (!legacy || typeof legacy !== 'object' || typeof legacy.id !== 'string' || existingIds.has(legacy.id)) continue
+        const account = accounts.find((item) => item.username.toLowerCase() === String(legacy.user || '').toLowerCase())
+        const date = String(legacy.date || '')
+        const sport = String(legacy.sport || '')
+        const slots = bookingSlots(legacy)
+        const racketRental = legacy.racketRental === true
+        const shuttlecockQuantity = Number(legacy.shuttlecockQuantity || 0)
+        const status = ['pending', 'confirmed', 'cancelled', 'rejected'].includes(legacy.status) ? legacy.status : null
+        if (!account || !validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !status ||
+          !validBookingSlots(slots, sport, true) || !Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100 ||
+          (slots.length === 0 && !racketRental && shuttlecockQuantity === 0)) continue
+        if (['pending', 'confirmed'].includes(status) && hasBookingConflict(bookings, date, slots)) {
+          skippedConflicts += 1
+          continue
+        }
+        bookings.push({
+          id: legacy.id,
+          user: account.username,
+          date,
+          slots,
+          sport,
+          deposit: Number.isFinite(Number(legacy.deposit)) ? Number(legacy.deposit) : 0,
+          racketRental,
+          shuttlecockQuantity,
+          status,
+          refundIssued: legacy.refundIssued === true,
+        })
+        existingIds.add(legacy.id)
+        imported += 1
+      }
+
+      if (imported > 0) saveBookings(bookings)
+      return sendJson(response, 200, { imported, skippedConflicts })
+    }
+
+    const bookingAction = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/bookings\/([^/]+)\/(confirm|reject|cancel)$/)
+      : null
+    if (bookingAction) {
+      const session = readSession(request)
+      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to update a reservation.' })
+      const bookingId = decodeURIComponent(bookingAction[1])
+      const action = bookingAction[2]
+      const bookings = readBookings()
+      const index = bookings.findIndex((booking) => booking.id === bookingId)
+      if (index === -1) return sendJson(response, 404, { error: 'Reservation not found.' })
+      const booking = bookings[index]
+
+      if (action === 'cancel') {
+        if (session.account.role !== 'player' || booking.user !== session.account.username) {
+          return sendJson(response, 403, { error: 'You can only cancel your own reservation.' })
+        }
+        if (!['pending', 'confirmed'].includes(booking.status)) {
+          return sendJson(response, 409, { error: 'This reservation can no longer be cancelled.' })
+        }
+        booking.status = 'cancelled'
+        booking.refundIssued = false
+      } else {
+        if (session.account.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+        if (action === 'confirm' && booking.status !== 'pending') {
+          return sendJson(response, 409, { error: 'Only pending reservations can be confirmed.' })
+        }
+        if (action === 'reject' && !['pending', 'confirmed'].includes(booking.status)) {
+          return sendJson(response, 409, { error: 'This reservation can no longer be rejected.' })
+        }
+        booking.status = action === 'confirm' ? 'confirmed' : 'rejected'
+        booking.refundIssued = action === 'reject'
+      }
+
+      saveBookings(bookings)
+      return sendJson(response, 200, { booking })
+    }
+
     if (route === 'GET /api/auth/session') {
       const session = readSession(request)
       if (!session?.account) return sendJson(response, 401, { error: 'Not signed in.' })

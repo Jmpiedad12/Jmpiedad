@@ -466,7 +466,20 @@ select {
 }
 
 .payment-panel {
-  grid-column: 1 / -1;
+  width: min(100%, 560px);
+  max-height: min(88vh, 760px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.payment-overlay {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(2, 6, 23, 0.78);
 }
 
 .payment-summary {

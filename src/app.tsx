@@ -82,6 +82,8 @@ type AccountProfile = {
   email: string
 }
 
+type SignedInUser = AccountProfile & { username: string; role: 'player' | 'admin' }
+
 const emptyAccountProfile: AccountProfile = { name: '', birthdate: '', phone: '', email: '' }
 const profileFromAccount = (account: Partial<AccountProfile>): AccountProfile => ({
   name: account.name || '',
@@ -91,9 +93,10 @@ const profileFromAccount = (account: Partial<AccountProfile>): AccountProfile =>
 })
 
 export function App() {
-  const [currentUser, setCurrentUser] = useState<{ username: string; role: 'player' | 'admin' } | null>(null)
+  const [currentUser, setCurrentUser] = useState<SignedInUser | null>(null)
   const [accountProfile, setAccountProfile] = useState(emptyAccountProfile)
   const [isManagingAccount, setIsManagingAccount] = useState(false)
+  const [resumeBookingReview, setResumeBookingReview] = useState(false)
   const [profileError, setProfileError] = useState('')
   const [profileMessage, setProfileMessage] = useState('')
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
@@ -109,6 +112,7 @@ export function App() {
   const [adminCount, setAdminCount] = useState(0)
   const [adminLimit, setAdminLimit] = useState(5)
   const [adminRequestError, setAdminRequestError] = useState('')
+  const [bookingSyncNotice, setBookingSyncNotice] = useState('')
   const [bookings, setBookings] = useState<Booking[]>(() => {
     try {
       const savedBookings = window.localStorage.getItem('redcourt-bookings')
@@ -173,6 +177,60 @@ export function App() {
       })
 
     return () => { active = false }
+  }, [currentUser])
+
+  useEffect(() => {
+    if (!currentUser) return
+
+    let active = true
+    let legacyImported = false
+    const refreshBookings = async () => {
+      try {
+        if (currentUser.role === 'admin' && !legacyImported) {
+          const saved = window.localStorage.getItem('redcourt-bookings')
+          const legacyBookings = saved ? JSON.parse(saved) : []
+          if (Array.isArray(legacyBookings) && legacyBookings.length > 0) {
+            const importResponse = await fetch('/api/bookings/import-legacy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bookings: legacyBookings }),
+            })
+            const importResult = await importResponse.json()
+            if (!importResponse.ok) throw new Error(importResult.error || 'Could not migrate previous reservations.')
+            if (importResult.imported > 0 || importResult.skippedConflicts > 0) {
+              setBookingSyncNotice(`${importResult.imported} previous reservations imported${importResult.skippedConflicts > 0 ? `; ${importResult.skippedConflicts} conflicting entries skipped` : ''}.`)
+            }
+          }
+          legacyImported = true
+        }
+
+        const response = await fetch('/api/bookings')
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.error || 'Could not refresh reservations.')
+        if (!active) return
+
+        const serverBookings = result.bookings as Booking[]
+        const serverIds = new Set(serverBookings.map((booking) => booking.id))
+        const saved = window.localStorage.getItem('redcourt-bookings')
+        const localBookings = saved ? JSON.parse(saved) : []
+        const ownLegacyBookings = currentUser.role === 'player' && Array.isArray(localBookings)
+          ? localBookings.filter((booking: Booking) => (
+            booking.user.toLowerCase() === currentUser.username.toLowerCase() && !serverIds.has(booking.id)
+          ))
+          : []
+        setBookings([...serverBookings, ...ownLegacyBookings])
+        setBookingSyncNotice((previous) => previous.startsWith('Could not') ? '' : previous)
+      } catch (error) {
+        if (active) setBookingSyncNotice(error instanceof Error ? `Could not sync reservations: ${error.message}` : 'Could not sync reservations.')
+      }
+    }
+
+    void refreshBookings()
+    const refreshTimer = window.setInterval(() => { void refreshBookings() }, 8000)
+    return () => {
+      active = false
+      window.clearInterval(refreshTimer)
+    }
   }, [currentUser])
 
   useEffect(() => {
@@ -282,7 +340,15 @@ export function App() {
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     setCurrentUser(null)
+    setAccountProfile(emptyAccountProfile)
     setIsManagingAccount(false)
+    setResumeBookingReview(false)
+    setDraftReservation(null)
+    setSelectedSlots([])
+    setRacketRental(false)
+    setShuttlecockQuantity(0)
+    setProfileError('')
+    setProfileMessage('')
   }
 
   const handleProfileSave = async (event: Event) => {
@@ -298,6 +364,7 @@ export function App() {
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Could not save account details.')
       setAccountProfile(profileFromAccount(result.user))
+      setCurrentUser(result.user)
       setProfileMessage('Account details saved.')
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : 'Could not save account details.')
@@ -307,6 +374,13 @@ export function App() {
   const handleBookingReview = () => {
     if (!currentUser || currentUser.role !== 'player') {
       window.alert('Log in as a player to reserve a court.')
+      return
+    }
+    if (selectedSlots.length > 0 && ![currentUser.name, currentUser.birthdate, currentUser.phone, currentUser.email].every((value) => value?.trim())) {
+      setResumeBookingReview(true)
+      setIsManagingAccount(true)
+      setProfileMessage('')
+      setProfileError('Complete and save your name, birthdate, contact number, and email before reserving.')
       return
     }
     const slots = [...selectedSlots].sort((left, right) => (
@@ -339,41 +413,70 @@ export function App() {
     })
   }
 
-  const confirmDeposit = () => {
+  useEffect(() => {
+    if (!resumeBookingReview || !currentUser || currentUser.role !== 'player') return
+    if (![currentUser.name, currentUser.birthdate, currentUser.phone, currentUser.email].every((value) => value?.trim())) return
+
+    setResumeBookingReview(false)
+    setIsManagingAccount(false)
+    setProfileMessage('')
+    handleBookingReview()
+  }, [resumeBookingReview, currentUser])
+
+  const confirmDeposit = async () => {
     if (!draftReservation || !currentUser) return
 
-    if (draftReservation.slots.some((slot) => isSlotTaken(slot.courtId, draftReservation.date, slot.time))) {
-      setDraftReservation(null)
+    try {
+      const response = await fetch('/api/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: draftReservation.date,
+          slots: draftReservation.slots,
+          sport: draftReservation.sport,
+          racketRental: draftReservation.racketRental,
+          shuttlecockQuantity: draftReservation.shuttlecockQuantity,
+        }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        if (response.status === 401) {
+          setDraftReservation(null)
+          setCurrentUser(null)
+          setIsManagingAccount(false)
+          setAuthMode('login')
+          setAuthRole('player')
+        }
+        if (response.status === 409) {
+          const refreshResponse = await fetch('/api/bookings')
+          if (refreshResponse.ok) {
+            const refreshed = await refreshResponse.json()
+            setBookings(refreshed.bookings)
+          }
+        }
+        throw new Error(result.error || 'Could not reserve those court times.')
+      }
+
+      setBookings((previous) => [result.booking, ...previous.filter((booking) => booking.id !== result.booking.id)])
       setSelectedSlots([])
-      window.alert('One or more selected time slots were just booked. Please choose another time.')
-      return
+      setRacketRental(false)
+      setShuttlecockQuantity(0)
+      setDraftReservation(null)
+      window.alert('Your payment was recorded. Your reservation is pending admin approval.')
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not complete the reservation.')
     }
-
-    const newReservation = {
-      id: `bk-${Date.now()}`,
-      user: currentUser.username,
-      date: draftReservation.date,
-      slots: draftReservation.slots,
-      sport: draftReservation.sport,
-      deposit: draftReservation.deposit,
-      racketRental: draftReservation.racketRental,
-      shuttlecockQuantity: draftReservation.shuttlecockQuantity,
-      status: 'pending',
-      refundIssued: false,
-    }
-
-    setBookings((previous) => [newReservation, ...previous])
-    setSelectedSlots([])
-    setRacketRental(false)
-    setShuttlecockQuantity(0)
-    setDraftReservation(null)
-    window.alert('Your downpayment has been recorded. Your reservation is pending admin approval.')
   }
 
-  const cancelUserBooking = (bookingId: string) => {
-    setBookings((previous) => previous.map((booking) =>
-      booking.id === bookingId ? { ...booking, status: 'cancelled', refundIssued: false } : booking,
-    ))
+  const cancelUserBooking = async (bookingId: string) => {
+    try {
+      const response = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}/cancel`, { method: 'POST' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Could not cancel reservation.')
+      setBookings((previous) => previous.map((booking) => booking.id === bookingId ? result.booking : booking))
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not cancel reservation.')
+    }
   }
 
   const sendReservationConfirmation = async (booking: Booking) => {
@@ -395,25 +498,19 @@ export function App() {
     }
   }
 
-  const handleAdminAction = (bookingId: string, action: 'confirm' | 'reject') => {
+  const handleAdminAction = async (bookingId: string, action: 'confirm' | 'reject') => {
     const selectedBooking = bookings.find((booking) => booking.id === bookingId)
     if (!selectedBooking) return
 
-    setBookings((previous) => previous.map((booking) => {
-      if (booking.id !== bookingId) return booking
-
-      if (action === 'confirm') {
-        return { ...booking, status: 'confirmed' }
-      }
-
-      return {
-        ...booking,
-        status: 'rejected',
-        refundIssued: true,
-      }
-    }))
-
-    if (action === 'confirm') void sendReservationConfirmation(selectedBooking)
+    try {
+      const response = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}/${action}`, { method: 'POST' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Could not update reservation.')
+      setBookings((previous) => previous.map((booking) => booking.id === bookingId ? result.booking : booking))
+      if (action === 'confirm') await sendReservationConfirmation(result.booking)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not update reservation.')
+    }
   }
 
   const handleAdminRequest = async (username: string, action: 'approve' | 'reject') => {
@@ -647,6 +744,7 @@ export function App() {
             <div className="panel-header">
               <h2>Reservation requests</h2>
             </div>
+            {bookingSyncNotice ? <p className="auth-error" role="status">{bookingSyncNotice}</p> : null}
 
             <div className="reservation-list">
               {adminReservations.map((booking) => (
@@ -743,6 +841,8 @@ export function App() {
                 setSelectedSlots([])
               }} />
             </label>
+
+            {bookingSyncNotice ? <p className="auth-error" role="status">{bookingSyncNotice}</p> : null}
 
             <section className="availability-results" aria-live="polite">
               <div className="panel-header">
@@ -902,8 +1002,9 @@ export function App() {
           </section>
 
           {draftReservation && (
-            <aside className="payment-panel panel">
-              <h2>Payment</h2>
+            <div className="payment-overlay" onClick={() => setDraftReservation(null)}>
+              <aside className="payment-panel panel" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title" onClick={(e) => e.stopPropagation()}>
+              <h2 id="payment-dialog-title">Payment review</h2>
               {draftReservation.slots.length > 0
                 ? <p>Hourly rate: PHP {HOURLY_RATES[draftReservation.sport as keyof typeof HOURLY_RATES]} per hour.</p>
                 : <p>Equipment-only order; no court booking included.</p>}
@@ -940,7 +1041,8 @@ export function App() {
                 <button className="primary" onClick={confirmDeposit}>Pay total</button>
                 <button className="secondary" onClick={() => setDraftReservation(null)}>Cancel</button>
               </div>
-            </aside>
+              </aside>
+            </div>
           )}
         </main>
       )}
