@@ -43,6 +43,26 @@ const formatInputDate = (date: Date) => {
   return new Date(date.getTime() - offset).toISOString().slice(0, 10)
 }
 
+const formatDate = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number)
+  const parsedDate = new Date(Date.UTC(year, month - 1, day))
+  if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) return date
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(parsedDate)
+}
+
+const formatDateTime = (dateTime: string) => new Intl.DateTimeFormat('en-US', {
+  month: 'long',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+}).format(new Date(dateTime))
+
 const reportDateRange = (date: string, period: 'day' | 'week' | 'month') => {
   const [year, month, day] = date.split('-').map(Number)
   const start = new Date(Date.UTC(year, month - 1, day))
@@ -152,7 +172,7 @@ const ReservationTimeline = ({ booking }: { booking: Booking }) => {
         <li className={`timeline-step ${entry.status}`} key={`${entry.status}-${entry.at}-${index}`}>
           <strong>{bookingStatusLabel(entry.status)}</strong>
           <span>{entry.message}</span>
-          {entry.at ? <time dateTime={entry.at}>{new Date(entry.at).toLocaleString()}</time> : null}
+          {entry.at ? <time dateTime={entry.at}>{formatDateTime(entry.at)}</time> : null}
         </li>
       ))}
     </ol>
@@ -1024,7 +1044,7 @@ export function App() {
             <div className="panel-header">
               <div>
                 <h2>Booking history and reports</h2>
-                <span className="muted">All players · {reportDateRange(selectedDate, reportPeriod).start} to {reportDateRange(selectedDate, reportPeriod).end}</span>
+                <span className="muted">All players · {formatDate(reportDateRange(selectedDate, reportPeriod).start)} to {formatDate(reportDateRange(selectedDate, reportPeriod).end)}</span>
               </div>
               <label>
                 Report period
@@ -1054,7 +1074,7 @@ export function App() {
                   <div>
                     <p className="muted">{booking.user}</p>
                     <h3>{courtSummary(bookingSlots(booking)) || 'Equipment only'}</h3>
-                    <p>{booking.date}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
+                    <p>{formatDate(booking.date)}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
                     {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
                     {booking.totalPrice != null ? <p className="muted">Total PHP {booking.totalPrice.toFixed(2)} · 50% downpayment PHP {booking.deposit.toFixed(2)}</p> : null}
                     <p className="status status--pending">Status: {bookingStatusLabel(booking.status)}</p>
@@ -1114,7 +1134,7 @@ export function App() {
             <div className="panel-header">
               <div>
                 <h2>Book a court</h2>
-                <span className="muted">Availability for {selectedDate}</span>
+                <span className="muted">Availability for {formatDate(selectedDate)}</span>
               </div>
             </div>
 
@@ -1243,7 +1263,7 @@ export function App() {
                   </select>
                 </label>
               </div>
-              <p className="muted">{effectivePreferredTime ? `Courts free at ${formatTimeRange(effectivePreferredTime)} on ${selectedDate}` : 'No future times are available on this date.'}</p>
+              <p className="muted">{effectivePreferredTime ? `Courts free at ${formatTimeRange(effectivePreferredTime)} on ${formatDate(selectedDate)}` : 'No future times are available on this date.'}</p>
               {preferredTimeCourts.length === 0 ? (
                 <p className="empty-state">No courts are available at that time.</p>
               ) : (
@@ -1327,7 +1347,7 @@ export function App() {
                     <div>
                       <p className="muted">{courtSummary(bookingSlots(booking)) || 'Equipment only'}</p>
                       <h3>{booking.sport}</h3>
-                      <p>{booking.date}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''}</p>
+                      <p>{formatDate(booking.date)}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''}</p>
                       {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
                       <p className="status">Status: {bookingStatusLabel(booking.status)}</p>
                       <ReservationTimeline booking={booking} />
@@ -1361,7 +1381,7 @@ export function App() {
                 <span>Sport</span>
                 <strong>{draftReservation.sport}</strong>
                 <span>{draftReservation.slots.length > 0 ? 'Date & time' : 'Rental date'}</span>
-                <strong>{draftReservation.date}{draftReservation.slots.length > 0 ? ` · ${slotSummary(draftReservation.slots)}` : ''}</strong>
+                <strong>{formatDate(draftReservation.date)}{draftReservation.slots.length > 0 ? ` · ${slotSummary(draftReservation.slots)}` : ''}</strong>
                 {draftReservation.slots.length > 0 ? (
                   <>
                     <span>Selected court-hours</span>
