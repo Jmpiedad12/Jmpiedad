@@ -13,7 +13,7 @@ const COURTS = [
   { id: 9, name: 'Court 9', sports: ['Badminton'] },
 ]
 
-const HOURLY_RATES = { Pickleball: 200, Badminton: 175 }
+const HOURLY_RATES = { Pickleball: 400, Badminton: 350 }
 const RACKET_RENTAL_PER_DAY = 100
 const SHUTTLECOCK_PRICE = 140
 const SPORTS = ['Pickleball', 'Badminton']
@@ -23,16 +23,53 @@ const HOURS = [
   '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00',
 ]
 
+const formatClockTime = (time: string) => {
+  const hour = Number(time.slice(0, 2))
+  return `${hour % 12 || 12} ${hour < 12 ? 'AM' : 'PM'}`
+}
+
+const formatTimeRange = (time: string) => {
+  const hour = Number(time.slice(0, 2))
+  const nextHour = hour + 1
+  const formatHour = (value: number) => String(value % 12 || 12)
+  const startPeriod = hour < 12 ? 'AM' : 'PM'
+  const endPeriod = nextHour < 12 ? 'AM' : 'PM'
+  const start = `${formatHour(hour)}${startPeriod !== endPeriod ? ` ${startPeriod}` : ''}`
+  return `${start}–${formatHour(nextHour)} ${endPeriod}`
+}
+
 const formatInputDate = (date: Date) => {
   const offset = date.getTimezoneOffset() * 60000
   return new Date(date.getTime() - offset).toISOString().slice(0, 10)
 }
+
+const reportDateRange = (date: string, period: 'day' | 'week' | 'month') => {
+  const [year, month, day] = date.split('-').map(Number)
+  const start = new Date(Date.UTC(year, month - 1, day))
+  if (period === 'week') start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7))
+  if (period === 'month') start.setUTCDate(1)
+  const end = new Date(start)
+  if (period === 'month') end.setUTCMonth(end.getUTCMonth() + 1)
+  else end.setUTCDate(end.getUTCDate() + (period === 'week' ? 7 : 1))
+  end.setUTCDate(end.getUTCDate() - 1)
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) }
+}
+
+const bookingStatusLabel = (status: string) => status === 'confirmed' ? 'approved' : status
+const reservationOccupiesSlot = (status: string) => status === 'pending' || status === 'confirmed'
+const slotStatusLabel = (status: string) => ({
+  pending: 'Pending approval',
+  confirmed: 'Reserved',
+  completed: 'Completed',
+}[status] || status)
 
 const addDays = (days: number) => {
   const date = new Date()
   date.setDate(date.getDate() + days)
   return formatInputDate(date)
 }
+
+const slotIsInFuture = (date: string, time: string) => Date.parse(`${date}T${time}:00+08:00`) > Date.now()
 
 type BookingSlot = { courtId: number; time: string }
 
@@ -46,10 +83,20 @@ type Booking = {
   slots?: BookingSlot[]
   sport: string
   deposit: number
+  totalPrice?: number
   racketRental?: boolean
   shuttlecockQuantity?: number
   status: string
+  createdAt?: string
+  statusHistory?: { status: string; at: string; message: string }[]
   refundIssued: boolean
+}
+
+type ScheduleBlock = {
+  id: string
+  date: string
+  slots: BookingSlot[]
+  reason: string
 }
 
 const bookingTimes = (booking: Booking) => booking.times ?? (booking.time ? [booking.time] : [])
@@ -57,7 +104,7 @@ const bookingSlots = (booking: Booking): BookingSlot[] => booking.slots ?? (
   booking.courtId == null ? [] : bookingTimes(booking).map((time) => ({ courtId: booking.courtId as number, time }))
 )
 const slotSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
-  .map((courtId) => `${COURTS.find((court) => court.id === courtId)?.name}: ${slots.filter((slot) => slot.courtId === courtId).map((slot) => slot.time).join(', ')}`)
+  .map((courtId) => `${COURTS.find((court) => court.id === courtId)?.name}: ${slots.filter((slot) => slot.courtId === courtId).map((slot) => formatTimeRange(slot.time)).join(', ')}`)
   .join(' · ')
 const courtSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
   .map((courtId) => COURTS.find((court) => court.id === courtId)?.name)
@@ -69,9 +116,11 @@ const bookingAddOns = (booking: Booking) => [
 ].filter(Boolean).join(' · ')
 
 const defaultAuth = {
+  name: '',
   username: '',
   password: '',
-  contact: '',
+  phone: '',
+  email: '',
   otp: '',
 }
 
@@ -91,6 +140,24 @@ const profileFromAccount = (account: Partial<AccountProfile>): AccountProfile =>
   phone: account.phone || '',
   email: account.email || '',
 })
+
+const ReservationTimeline = ({ booking }: { booking: Booking }) => {
+  const history = booking.statusHistory?.length
+    ? booking.statusHistory
+    : [{ status: booking.status, at: booking.createdAt || '', message: 'Reservation status recorded.' }]
+
+  return (
+    <ol className="status-timeline" aria-label="Reservation status timeline">
+      {history.map((entry, index) => (
+        <li className={`timeline-step ${entry.status}`} key={`${entry.status}-${entry.at}-${index}`}>
+          <strong>{bookingStatusLabel(entry.status)}</strong>
+          <span>{entry.message}</span>
+          {entry.at ? <time dateTime={entry.at}>{new Date(entry.at).toLocaleString()}</time> : null}
+        </li>
+      ))}
+    </ol>
+  )
+}
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<SignedInUser | null>(null)
@@ -113,6 +180,11 @@ export function App() {
   const [adminLimit, setAdminLimit] = useState(5)
   const [adminRequestError, setAdminRequestError] = useState('')
   const [bookingSyncNotice, setBookingSyncNotice] = useState('')
+  const [scheduleBlocks, setScheduleBlocks] = useState<ScheduleBlock[]>([])
+  const [selectedBlockSlots, setSelectedBlockSlots] = useState<BookingSlot[]>([])
+  const [blockReason, setBlockReason] = useState('')
+  const [blockError, setBlockError] = useState('')
+  const [reportPeriod, setReportPeriod] = useState<'day' | 'week' | 'month'>('day')
   const [bookings, setBookings] = useState<Booking[]>(() => {
     try {
       const savedBookings = window.localStorage.getItem('redcourt-bookings')
@@ -124,6 +196,10 @@ export function App() {
   })
   const [selectedDate, setSelectedDate] = useState(addDays(0))
   const [selectedSport, setSelectedSport] = useState('Pickleball')
+  const [rangeCourtId, setRangeCourtId] = useState(1)
+  const [rangeStart, setRangeStart] = useState('18:00')
+  const [rangeEnd, setRangeEnd] = useState('19:00')
+  const [rangeError, setRangeError] = useState('')
   const [preferredTime, setPreferredTime] = useState('18:00')
   const [selectedSlots, setSelectedSlots] = useState<BookingSlot[]>([])
   const [racketRental, setRacketRental] = useState(false)
@@ -133,6 +209,7 @@ export function App() {
     date: string
     sport: string
     deposit: number
+    totalPrice: number
     racketRental: boolean
     shuttlecockQuantity: number
   }>(null)
@@ -204,9 +281,13 @@ export function App() {
           legacyImported = true
         }
 
-        const response = await fetch('/api/bookings')
-        const result = await response.json()
+        const [response, blocksResponse] = await Promise.all([
+          fetch('/api/bookings'),
+          fetch('/api/blocks'),
+        ])
+        const [result, blocksResult] = await Promise.all([response.json(), blocksResponse.json()])
         if (!response.ok) throw new Error(result.error || 'Could not refresh reservations.')
+        if (!blocksResponse.ok) throw new Error(blocksResult.error || 'Could not refresh blocked court times.')
         if (!active) return
 
         const serverBookings = result.bookings as Booking[]
@@ -219,6 +300,7 @@ export function App() {
           ))
           : []
         setBookings([...serverBookings, ...ownLegacyBookings])
+        setScheduleBlocks(blocksResult.blocks as ScheduleBlock[])
         setBookingSyncNotice((previous) => previous.startsWith('Could not') ? '' : previous)
       } catch (error) {
         if (active) setBookingSyncNotice(error instanceof Error ? `Could not sync reservations: ${error.message}` : 'Could not sync reservations.')
@@ -243,16 +325,50 @@ export function App() {
   const totalPayment = hourlyRate * selectedSlots.length + racketRentalTotal + shuttlecockTotal
   const canReviewOrder = selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRental || shuttlecockQuantity > 0))
 
-  const isSlotTaken = (courtId: number, date: string, time: string) =>
-    bookings.some((booking) => (
+  const slotReservation = (courtId: number, date: string, time: string) =>
+    bookings.find((booking) => (
       bookingSlots(booking).some((slot) => slot.courtId === courtId && slot.time === time) &&
       booking.date === date &&
-      booking.status !== 'cancelled' &&
-      booking.status !== 'rejected'
+      reservationOccupiesSlot(booking.status)
     ))
+  const isSlotTaken = (courtId: number, date: string, time: string) => Boolean(slotReservation(courtId, date, time))
 
   const availableCourts = COURTS.filter((court) => court.sports.includes(selectedSport))
-  const preferredTimeCourts = availableCourts.filter((court) => !isSlotTaken(court.id, selectedDate, preferredTime))
+  const isSlotBlocked = (courtId: number, time: string) => scheduleBlocks.some((block) => (
+    block.date === selectedDate && block.slots.some((slot) => slot.courtId === courtId && slot.time === time)
+  ))
+  const rangeStartOptions = HOURS.filter((time) => slotIsInFuture(selectedDate, time))
+  const effectiveRangeStart = rangeStartOptions.includes(rangeStart) ? rangeStart : rangeStartOptions[0] || ''
+  const rangeEndOptions = effectiveRangeStart
+    ? HOURS.slice(HOURS.indexOf(effectiveRangeStart) + 1).concat('22:00')
+    : []
+  const effectiveRangeEnd = rangeEndOptions.includes(rangeEnd) ? rangeEnd : rangeEndOptions[0] || ''
+  const preferredTimeOptions = HOURS.filter((time) => slotIsInFuture(selectedDate, time))
+  const effectivePreferredTime = preferredTimeOptions.includes(preferredTime) ? preferredTime : preferredTimeOptions[0] || ''
+  const preferredTimeCourts = availableCourts.filter((court) => (
+    effectivePreferredTime &&
+    !isSlotTaken(court.id, selectedDate, effectivePreferredTime) &&
+    !isSlotBlocked(court.id, effectivePreferredTime)
+  ))
+
+  const addTimeRange = () => {
+    setRangeError('')
+    const startIndex = HOURS.indexOf(effectiveRangeStart)
+    const endIndex = effectiveRangeEnd === '22:00' ? HOURS.length : HOURS.indexOf(effectiveRangeEnd)
+    if (startIndex < 0 || endIndex <= startIndex) {
+      setRangeError('Choose an end time after the start time.')
+      return
+    }
+    const slots = HOURS.slice(startIndex, endIndex).map((time) => ({ courtId: rangeCourtId, time }))
+    if (slots.some((slot) => !slotIsInFuture(selectedDate, slot.time) || isSlotTaken(slot.courtId, selectedDate, slot.time) || isSlotBlocked(slot.courtId, slot.time))) {
+      setRangeError('That time range includes a past, reserved, or blocked slot. Choose another range.')
+      return
+    }
+    setSelectedSlots((previous) => [
+      ...previous,
+      ...slots.filter((slot) => !previous.some((selected) => selected.courtId === slot.courtId && selected.time === slot.time)),
+    ])
+  }
 
   const generateOtp = async () => {
     setOtpSent(false)
@@ -261,7 +377,7 @@ export function App() {
       const response = await fetch('/api/auth/otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact: authForm.contact }),
+        body: JSON.stringify({ contact: authForm.phone }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Could not send OTP.')
@@ -298,8 +414,8 @@ export function App() {
       return
     }
 
-    if (authMode === 'signup' && (!authForm.contact.trim() || !authForm.otp.trim())) {
-      setAuthError('Enter your email or phone number and the OTP sent to it.')
+    if (authMode === 'signup' && (!authForm.name.trim() || !authForm.phone.trim() || !authForm.email.trim() || !authForm.otp.trim())) {
+      setAuthError('Enter your name, contact number, email, and the OTP sent to your contact number.')
       return
     }
 
@@ -314,7 +430,13 @@ export function App() {
           username: authForm.username,
           password: authForm.password,
           ...(authMode === 'signup'
-            ? { contact: authForm.contact, otp: authForm.otp, role: registrationRole }
+            ? {
+                name: authForm.name,
+                phone: authForm.phone,
+                email: authForm.email,
+                otp: authForm.otp,
+                role: registrationRole,
+              }
             : { role: authRole }),
         }),
       })
@@ -399,15 +521,17 @@ export function App() {
       return
     }
 
-    const deposit = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES] * slots.length
+    const totalPrice = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES] * slots.length
       + (bookingRacketRental ? RACKET_RENTAL_PER_DAY : 0)
       + bookingShuttlecockQuantity * SHUTTLECOCK_PRICE
+    const deposit = totalPrice / 2
 
     setDraftReservation({
       slots,
       date: selectedDate,
       sport: selectedSport,
       deposit,
+      totalPrice,
       racketRental: bookingRacketRental,
       shuttlecockQuantity: bookingShuttlecockQuantity,
     })
@@ -462,7 +586,7 @@ export function App() {
       setRacketRental(false)
       setShuttlecockQuantity(0)
       setDraftReservation(null)
-      window.alert('Your payment was recorded. Your reservation is pending admin approval.')
+      window.alert('Your 50% downpayment was recorded. Your reservation is pending admin approval.')
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Could not complete the reservation.')
     }
@@ -479,35 +603,73 @@ export function App() {
     }
   }
 
-  const sendReservationConfirmation = async (booking: Booking) => {
-    const slots = bookingSlots(booking)
-    if (slots.length === 0) return
-
+  const handleBlockSlots = async () => {
+    setBlockError('')
+    if (selectedBlockSlots.length === 0 || blockReason.trim().length < 3) {
+      setBlockError('Select at least one free time and enter a reason.')
+      return
+    }
     try {
-      const response = await fetch('/api/admin/reservations/confirmed', {
+      const response = await fetch('/api/admin/blocks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: booking.user, date: booking.date, slots }),
+        body: JSON.stringify({ date: selectedDate, slots: selectedBlockSlots, reason: blockReason }),
       })
       const result = await response.json()
-      if (!response.ok) throw new Error(result.error || 'SMS delivery failed.')
-      window.alert(`Reservation confirmed. SMS sent to the number ending in ${result.phoneLastFour}.`)
+      if (!response.ok) throw new Error(result.error || 'Could not block those court times.')
+      setScheduleBlocks((previous) => [...previous, result.block])
+      setSelectedBlockSlots([])
+      setBlockReason('')
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'SMS delivery failed.'
-      window.alert(`Reservation status saved, but the SMS was not sent: ${message}`)
+      setBlockError(error instanceof Error ? error.message : 'Could not block those court times.')
     }
   }
 
-  const handleAdminAction = async (bookingId: string, action: 'confirm' | 'reject') => {
-    const selectedBooking = bookings.find((booking) => booking.id === bookingId)
-    if (!selectedBooking) return
+  const handleRemoveBlock = async (blockId: string) => {
+    setBlockError('')
+    try {
+      const response = await fetch(`/api/admin/blocks/${encodeURIComponent(blockId)}`, { method: 'DELETE' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Could not remove schedule block.')
+      setScheduleBlocks((previous) => previous.filter((block) => block.id !== blockId))
+    } catch (error) {
+      setBlockError(error instanceof Error ? error.message : 'Could not remove schedule block.')
+    }
+  }
 
+  const downloadScheduleReport = () => {
+    const range = reportDateRange(selectedDate, reportPeriod)
+    const rows = adminReservations.filter((booking) => booking.date >= range.start && booking.date <= range.end)
+    const escapeCsv = (value: string | number) => {
+      const safe = String(value).replace(/^[=+@]/, "'$&")
+      return `"${safe.replace(/"/g, '""')}"`
+    }
+    const csv = [
+      ['Date', 'Player', 'Sport', 'Court schedule', 'Status', 'Total price PHP', 'Downpayment PHP'].map(escapeCsv).join(','),
+      ...rows.map((booking) => [
+        booking.date,
+        booking.user,
+        booking.sport,
+        slotSummary(bookingSlots(booking)) || 'Equipment only',
+        bookingStatusLabel(booking.status),
+        booking.totalPrice ?? booking.deposit,
+        booking.deposit,
+      ].map(escapeCsv).join(',')),
+    ].join('\r\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `redcourt-${reportPeriod}-report-${selectedDate}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleAdminAction = async (bookingId: string, action: 'confirm' | 'reject') => {
     try {
       const response = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}/${action}`, { method: 'POST' })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Could not update reservation.')
       setBookings((previous) => previous.map((booking) => booking.id === bookingId ? result.booking : booking))
-      if (action === 'confirm') await sendReservationConfirmation(result.booking)
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Could not update reservation.')
     }
@@ -534,9 +696,10 @@ export function App() {
 
   return (
     <div class="redcourt-app">
+      <a className="skip-link" href="#main-content">Skip to main content</a>
       <header class="topbar">
-        <div>
-          <p class="eyebrow">Red Court</p>
+        <div class="topbar-brand">
+          <img class="brand-logo" src="/redcourt-logo.png" alt="Red Court Sports Center" />
           <h1>Sport court reservation and scheduling</h1>
         </div>
         <div class="topbar-actions">
@@ -559,9 +722,38 @@ export function App() {
         </div>
       </header>
 
+      {!isManagingAccount && (
+        <section className="venue-hero" aria-label="Red Court Sports Center">
+          <img src="/redcourt-courts.png" alt="Players enjoying a game at the Red Court indoor courts" />
+          <div className="venue-hero-copy">
+            <p>PLAY YOUR GAME</p>
+            <h2>Make room for one more rally.</h2>
+            <span>Badminton · Pickleball · Sepak Takraw</span>
+          </div>
+        </section>
+      )}
+
+      {currentUser && !isManagingAccount ? (
+        <nav className="dashboard-nav" aria-label="Dashboard navigation">
+          {currentUser.role === 'admin' ? (
+            <>
+              <a href="#admin-schedule">Court schedule</a>
+              <a href="#admin-reports">Reports</a>
+              <a href="#admin-reservations">Reservations</a>
+              <a href="#admin-accounts">Admin requests</a>
+            </>
+          ) : (
+            <>
+              <a href="#player-booking">Book a court</a>
+              <a href="#player-reservations">My reservations</a>
+            </>
+          )}
+        </nav>
+      ) : null}
+
       {currentUser && isManagingAccount ? (
         <main className="profile-layout">
-          <section className="panel profile-panel">
+          <section className="panel profile-panel" id="main-content">
             <h2>Manage account</h2>
             <p className="muted">Update the personal details saved with your account.</p>
             <form className="auth-form" onSubmit={handleProfileSave}>
@@ -615,7 +807,7 @@ export function App() {
           </section>
         </main>
       ) : !currentUser ? (
-        <main className="auth-layout">
+        <main className="auth-layout" id="main-content">
           <section className="auth-panel">
             <h2>{authMode === 'login' ? `${authRole === 'admin' ? 'Admin' : 'Player'} login` : registrationRole === 'admin' ? 'Request admin account' : 'Create account'}</h2>
             <p>{authMode === 'login'
@@ -635,6 +827,12 @@ export function App() {
               <label>
                 Username
                 <input
+                  type="text"
+                  autoComplete="username"
+                  required
+                  minLength={3}
+                  maxLength={32}
+                  pattern="[A-Za-z0-9_.-]+"
                   value={authForm.username}
                   onInput={(e) => setAuthForm({ ...authForm, username: (e.target as HTMLInputElement).value })}
                   placeholder="playername"
@@ -646,6 +844,9 @@ export function App() {
                 <span className="password-input-wrap">
                   <input
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                    required
+                    minLength={authMode === 'signup' ? 10 : undefined}
                     value={authForm.password}
                     onInput={(e) => setAuthForm({ ...authForm, password: (e.target as HTMLInputElement).value })}
                     placeholder="Your password"
@@ -665,24 +866,58 @@ export function App() {
               {authMode === 'signup' && (
                 <>
                   <label>
-                    Email or phone number
+                    Full name
                     <input
                       type="text"
+                      autoComplete="name"
+                      required
+                      minLength={2}
+                      maxLength={100}
+                      value={authForm.name}
+                      onInput={(e) => setAuthForm({ ...authForm, name: (e.target as HTMLInputElement).value })}
+                      placeholder="Your full name"
+                    />
+                  </label>
+
+                  <label>
+                    Contact number
+                    <input
+                      type="tel"
+                      autoComplete="tel"
+                      required
+                      pattern="\+?[\d\s()-]{7,20}"
+                      value={authForm.phone}
+                      onInput={(e) => setAuthForm({ ...authForm, phone: (e.target as HTMLInputElement).value })}
+                      placeholder="+63 912 345 6789"
+                    />
+                  </label>
+
+                  <label>
+                    Email address
+                    <input
+                      type="email"
                       autoComplete="email"
-                      value={authForm.contact}
-                      onInput={(e) => setAuthForm({ ...authForm, contact: (e.target as HTMLInputElement).value })}
-                      placeholder="you@gmail.com or +63 912 345 6789"
+                      required
+                      value={authForm.email}
+                      onInput={(e) => setAuthForm({ ...authForm, email: (e.target as HTMLInputElement).value })}
+                      placeholder="you@example.com"
                     />
                   </label>
 
                   <div className="otp-row">
-                    <button type="button" className="secondary" onClick={generateOtp}>{otpSent ? 'Resend OTP' : 'Send OTP'}</button>
+                    <button type="button" className="secondary" onClick={generateOtp}>{otpSent ? 'Resend phone OTP' : 'Send verification code to phone'}</button>
                   </div>
                   {otpMessage ? <p className="otp-message" role="status">{otpMessage}</p> : null}
 
                   <label>
                     Enter OTP
                     <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      pattern="[0-9]{6}"
+                      maxLength={6}
+                      required
                       value={authForm.otp}
                       onInput={(e) => setAuthForm({ ...authForm, otp: (e.target as HTMLInputElement).value })}
                       placeholder="123456"
@@ -699,24 +934,32 @@ export function App() {
           </section>
 
           <aside className="info-panel">
-            <h3>Reservation rules</h3>
-            <ul>
-              <li>Courts 1-3 support Pickleball and Badminton.</li>
-              <li>Courts 4-9 are Badminton only.</li>
-              <li>Occupied time slots are disabled in this booking view.</li>
-              <li>Hourly rate: PHP 200 for Pickleball and PHP 175 for Badminton.</li>
-              <li>Admin can confirm or reject bookings and refund for rejected reservations.</li>
-            </ul>
+            <h3>Welcome to Red Court</h3>
+            <img className="promo-image" src="/redcourt-promo.png" alt="Red Court Sports Center rates, opening hours, and promotions" />
+            <details className="reservation-rules">
+              <summary>Reservation rules</summary>
+              <ul>
+                <li>Courts 1-3 support Pickleball and Badminton.</li>
+                <li>Courts 4-9 are Badminton only.</li>
+                <li>Occupied time slots are disabled in this booking view.</li>
+                <li>Hourly rate: PHP 400 for Pickleball and PHP 350 for Badminton.</li>
+                <li>A 50% downpayment is due when you place a reservation.</li>
+                <li>Admin can confirm or reject bookings and refund for rejected reservations.</li>
+              </ul>
+            </details>
           </aside>
         </main>
       ) : currentUser.role === 'admin' ? (
-        <main className="dashboard admin-dashboard">
-          <section className="panel schedule-panel">
+        <main className="dashboard admin-dashboard" id="main-content">
+          <section className="panel schedule-panel" id="admin-schedule">
             <div className="panel-header">
               <h2>Admin court schedule</h2>
               <label>
                 Date
-                <input type="date" value={selectedDate} onInput={(e) => setSelectedDate((e.target as HTMLInputElement).value)} />
+                <input type="date" value={selectedDate} onInput={(e) => {
+                  setSelectedDate((e.target as HTMLInputElement).value)
+                  setSelectedBlockSlots([])
+                }} />
               </label>
             </div>
 
@@ -727,20 +970,79 @@ export function App() {
                   <p>{court.sports.join(' / ')}</p>
                   <div className="slot-list">
                     {HOURS.map((time) => {
-                      const occupied = isSlotTaken(court.id, selectedDate, time)
+                      const reservation = slotReservation(court.id, selectedDate, time)
+                      const occupied = Boolean(reservation)
+                      const block = scheduleBlocks.find((entry) => entry.date === selectedDate && entry.slots.some((slot) => slot.courtId === court.id && slot.time === time))
+                      const selected = selectedBlockSlots.some((slot) => slot.courtId === court.id && slot.time === time)
                       return (
-                        <span className={occupied ? 'slot occupied' : 'slot free'} key={`${court.id}-${time}`}>
-                          {time}
-                        </span>
+                        <button
+                          type="button"
+                          className={`slot ${block ? 'occupied' : occupied ? 'occupied' : selected ? 'selected' : 'free'}`}
+                          key={`${court.id}-${time}`}
+                          disabled={occupied && !block}
+                          onClick={() => {
+                            if (block) {
+                              void handleRemoveBlock(block.id)
+                            } else {
+                              setSelectedBlockSlots((previous) => selected
+                                ? previous.filter((slot) => !(slot.courtId === court.id && slot.time === time))
+                                : [...previous, { courtId: court.id, time }])
+                            }
+                          }}
+                        >
+                          {formatTimeRange(time)}
+                          <small>{block ? 'Blocked' : reservation ? slotStatusLabel(reservation.status) : selected ? 'Selected' : 'Available'}</small>
+                        </button>
                       )
                     })}
                   </div>
                 </div>
               ))}
             </div>
+
+            <div className="schedule-block-tools">
+              <h3>Block court times</h3>
+              <p className="muted">Select available times above to reserve them for maintenance or an event.</p>
+              <label>
+                Reason
+                <input
+                  type="text"
+                  maxLength={120}
+                  value={blockReason}
+                  onInput={(event) => setBlockReason((event.target as HTMLInputElement).value)}
+                  placeholder="Maintenance or event"
+                />
+              </label>
+              {blockError ? <p className="auth-error" role="alert">{blockError}</p> : null}
+              <button type="button" className="primary" disabled={selectedBlockSlots.length === 0} onClick={() => void handleBlockSlots()}>
+                Block {selectedBlockSlots.length || ''} selected time{selectedBlockSlots.length === 1 ? '' : 's'}
+              </button>
+            </div>
           </section>
 
-          <section className="panel">
+          <section className="panel report-panel" id="admin-reports">
+            <div className="panel-header">
+              <div>
+                <h2>Booking history and reports</h2>
+                <span className="muted">All players · {reportDateRange(selectedDate, reportPeriod).start} to {reportDateRange(selectedDate, reportPeriod).end}</span>
+              </div>
+              <label>
+                Report period
+                <select value={reportPeriod} onChange={(event) => setReportPeriod((event.target as HTMLSelectElement).value as typeof reportPeriod)}>
+                  <option value="day">Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
+              </label>
+            </div>
+            <p>{adminReservations.filter((booking) => {
+              const range = reportDateRange(selectedDate, reportPeriod)
+              return booking.date >= range.start && booking.date <= range.end
+            }).length} reservations in this period.</p>
+            <button type="button" className="secondary" onClick={downloadScheduleReport}>Download CSV report</button>
+          </section>
+
+          <section className="panel" id="admin-reservations">
             <div className="panel-header">
               <h2>Reservation requests</h2>
             </div>
@@ -754,21 +1056,20 @@ export function App() {
                     <h3>{courtSummary(bookingSlots(booking)) || 'Equipment only'}</h3>
                     <p>{booking.date}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
                     {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
-                    <p className="status status--pending">Status: {booking.status}</p>
+                    {booking.totalPrice != null ? <p className="muted">Total PHP {booking.totalPrice.toFixed(2)} · 50% downpayment PHP {booking.deposit.toFixed(2)}</p> : null}
+                    <p className="status status--pending">Status: {bookingStatusLabel(booking.status)}</p>
+                    <ReservationTimeline booking={booking} />
                   </div>
 
                   <div className="reservation-actions">
                     {booking.status === 'pending' && (
                       <>
-                        <button className="primary" onClick={() => handleAdminAction(booking.id, 'confirm')}>Confirm</button>
+                        <button className="primary" onClick={() => handleAdminAction(booking.id, 'confirm')}>Approve</button>
                         <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
                       </>
                     )}
                     {booking.status === 'confirmed' && (
                       <>
-                        {bookingSlots(booking).length > 0 ? (
-                          <button className="secondary" onClick={() => void sendReservationConfirmation(booking)}>Resend confirmation SMS</button>
-                        ) : null}
                         <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
                       </>
                     )}
@@ -778,7 +1079,7 @@ export function App() {
             </div>
           </section>
 
-          <section className="panel admin-requests-panel">
+          <section className="panel admin-requests-panel" id="admin-accounts">
             <div className="panel-header">
               <h2>Admin account requests</h2>
               <span className="muted">{adminCount}/{adminLimit} accounts</span>
@@ -808,8 +1109,8 @@ export function App() {
           </section>
         </main>
       ) : (
-        <main className="dashboard player-dashboard">
-          <section className="panel booking-panel">
+        <main className="dashboard player-dashboard" id="main-content">
+          <section className="panel booking-panel" id="player-booking">
             <div className="panel-header">
               <div>
                 <h2>Book a court</h2>
@@ -822,6 +1123,7 @@ export function App() {
               <select value={selectedSport} onChange={(e) => {
                 const sport = (e.target as HTMLSelectElement).value
                 setSelectedSport(sport)
+                setRangeCourtId(1)
                 setSelectedSlots([])
                 if (sport !== 'Badminton') {
                   setRacketRental(false)
@@ -836,11 +1138,45 @@ export function App() {
 
             <label className="booking-date-picker">
               Day
-              <input type="date" value={selectedDate} onInput={(e) => {
+              <input type="date" min={addDays(0)} value={selectedDate} onInput={(e) => {
                 setSelectedDate((e.target as HTMLInputElement).value)
                 setSelectedSlots([])
               }} />
             </label>
+
+            <section className="range-booking-tools" aria-label="Choose reservation start and end time">
+              <h3>Choose a time range</h3>
+              <div className="range-booking-fields">
+                <label>
+                  Court
+                  <select value={rangeCourtId} onChange={(event) => setRangeCourtId(Number((event.target as HTMLSelectElement).value))}>
+                    {availableCourts.map((court) => <option value={court.id} key={court.id}>{court.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Start time
+                  <select value={effectiveRangeStart} onChange={(event) => {
+                    const start = (event.target as HTMLSelectElement).value
+                    setRangeStart(start)
+                    if (effectiveRangeEnd <= start) setRangeEnd(HOURS[HOURS.indexOf(start) + 1] || '22:00')
+                  }}>
+                    {rangeStartOptions.length > 0
+                      ? rangeStartOptions.map((time) => <option value={time} key={time}>{formatClockTime(time)}</option>)
+                      : <option value="">No future times available</option>}
+                  </select>
+                </label>
+                <label>
+                  End time
+                  <select value={effectiveRangeEnd} onChange={(event) => setRangeEnd((event.target as HTMLSelectElement).value)}>
+                    {rangeEndOptions.length > 0 ? rangeEndOptions.map((time) => (
+                      <option value={time} key={time}>{formatClockTime(time)}</option>
+                    )) : <option value="">No future times available</option>}
+                  </select>
+                </label>
+              </div>
+              {rangeError ? <p className="auth-error" role="alert">{rangeError}</p> : null}
+              <button type="button" className="secondary" disabled={!effectiveRangeStart || !effectiveRangeEnd} onClick={addTimeRange}>Add time range</button>
+            </section>
 
             {bookingSyncNotice ? <p className="auth-error" role="status">{bookingSyncNotice}</p> : null}
 
@@ -854,7 +1190,7 @@ export function App() {
               ) : (
                 <div className="court-grid">
                   {availableCourts.map((court) => {
-                    const freeTimes = HOURS.filter((time) => !isSlotTaken(court.id, selectedDate, time))
+                    const freeTimes = HOURS.filter((time) => slotIsInFuture(selectedDate, time) && !isSlotTaken(court.id, selectedDate, time) && !isSlotBlocked(court.id, time))
                     return (
                       <section key={court.id} className={`court-card schedule-court${selectedSlots.some((slot) => slot.courtId === court.id) ? ' selected' : ''}`}>
                         <div className="schedule-court-heading">
@@ -863,7 +1199,10 @@ export function App() {
                         </div>
                         <div className="court-time-list">
                           {HOURS.map((time) => {
-                            const occupied = isSlotTaken(court.id, selectedDate, time)
+                            const blocked = isSlotBlocked(court.id, time)
+                            const reservation = slotReservation(court.id, selectedDate, time)
+                            const past = !slotIsInFuture(selectedDate, time)
+                            const occupied = Boolean(reservation) || blocked || past
                             const selected = selectedSlots.some((slot) => slot.courtId === court.id && slot.time === time)
                             return (
                               <label key={time} className={`time-slot${selected ? ' selected' : ''}${occupied ? ' occupied' : ''}`}>
@@ -879,8 +1218,8 @@ export function App() {
                                     }
                                   }}
                                 />
-                                <span>{time}</span>
-                                {occupied ? <span className="slot-unavailable">Booked</span> : null}
+                                <span>{formatTimeRange(time)}</span>
+                                {occupied ? <span className="slot-unavailable">{blocked ? 'Blocked' : past ? 'Past' : slotStatusLabel(reservation?.status || 'reserved')}</span> : null}
                               </label>
                             )
                           })}
@@ -897,12 +1236,14 @@ export function App() {
               <div className="booking-form-grid">
                 <label>
                   Preferred time
-                  <select value={preferredTime} onChange={(e) => setPreferredTime((e.target as HTMLSelectElement).value)}>
-                    {HOURS.map((time) => <option value={time} key={time}>{time}</option>)}
+                  <select value={effectivePreferredTime} onChange={(e) => setPreferredTime((e.target as HTMLSelectElement).value)}>
+                    {preferredTimeOptions.length > 0
+                      ? preferredTimeOptions.map((time) => <option value={time} key={time}>{formatTimeRange(time)}</option>)
+                      : <option value="">No future times available</option>}
                   </select>
                 </label>
               </div>
-              <p className="muted">Courts free at {preferredTime} on {selectedDate}</p>
+              <p className="muted">{effectivePreferredTime ? `Courts free at ${formatTimeRange(effectivePreferredTime)} on ${selectedDate}` : 'No future times are available on this date.'}</p>
               {preferredTimeCourts.length === 0 ? (
                 <p className="empty-state">No courts are available at that time.</p>
               ) : (
@@ -913,9 +1254,9 @@ export function App() {
                       key={court.id}
                       className="secondary"
                       onClick={() => {
-                        setSelectedSlots((previous) => previous.some((slot) => slot.courtId === court.id && slot.time === preferredTime)
+                        setSelectedSlots((previous) => previous.some((slot) => slot.courtId === court.id && slot.time === effectivePreferredTime)
                           ? previous
-                          : [...previous, { courtId: court.id, time: preferredTime }])
+                          : [...previous, { courtId: court.id, time: effectivePreferredTime }])
                       }}
                     >
                       {court.name}
@@ -962,15 +1303,17 @@ export function App() {
                 <strong>{selectedSlots.length}</strong>
               </div>
               <div>
-                <span>Total payment · PHP {hourlyRate}/hour</span>
+                <span>Total price · PHP {hourlyRate}/hour</span>
                 <strong>PHP {totalPayment.toFixed(2)}</strong>
+                <span>50% downpayment</span>
+                <strong>PHP {(totalPayment / 2).toFixed(2)}</strong>
               </div>
             </div>
 
             <button type="button" className="primary wide" disabled={!(selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRental || shuttlecockQuantity > 0)))} onClick={handleBookingReview}>Review order</button>
           </section>
 
-          <section className="panel">
+          <section className="panel" id="player-reservations">
             <div className="panel-header">
               <h2>Your reservations</h2>
             </div>
@@ -986,14 +1329,18 @@ export function App() {
                       <h3>{booking.sport}</h3>
                       <p>{booking.date}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''}</p>
                       {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
-                      <p className="status">Status: {booking.status}</p>
+                      <p className="status">Status: {bookingStatusLabel(booking.status)}</p>
+                      <ReservationTimeline booking={booking} />
                     </div>
 
                     <div className="reservation-actions">
                       {booking.status === 'pending' || booking.status === 'confirmed' ? (
                         <button className="secondary danger" onClick={() => cancelUserBooking(booking.id)}>Cancel</button>
                       ) : null}
-                      <span className="deposit-tag">Total PHP {booking.deposit.toFixed(2)}</span>
+                      <span className="deposit-tag">
+                        Total PHP {(booking.totalPrice ?? booking.deposit).toFixed(2)}
+                        {booking.totalPrice != null ? ` · 50% downpayment PHP ${booking.deposit.toFixed(2)}` : ''}
+                      </span>
                     </div>
                   </div>
                 ))
@@ -1033,12 +1380,14 @@ export function App() {
                     <strong>PHP {(draftReservation.shuttlecockQuantity * SHUTTLECOCK_PRICE).toFixed(2)}</strong>
                   </>
                 ) : null}
-                <span>Total payment due</span>
+                <span>Total price</span>
+                <strong>PHP {draftReservation.totalPrice.toFixed(2)}</strong>
+                <span>50% downpayment due now</span>
                 <strong>PHP {draftReservation.deposit.toFixed(2)}</strong>
               </div>
 
               <div className="payment-buttons">
-                <button className="primary" onClick={confirmDeposit}>Pay total</button>
+                <button className="primary" onClick={confirmDeposit}>Pay 50% downpayment</button>
                 <button className="secondary" onClick={() => setDraftReservation(null)}>Cancel</button>
               </div>
               </aside>
@@ -1049,10 +1398,10 @@ export function App() {
       {canReviewOrder && !draftReservation ? (
         <div className="quick-booking-bar" role="region" aria-label="Booking total">
           <div className="quick-booking-total" aria-live="polite">
-            <span>{selectedSlots.length} court-hour{selectedSlots.length === 1 ? '' : 's'} selected</span>
-            <strong>Total PHP {totalPayment.toFixed(2)}</strong>
+            <span>50% downpayment · total PHP {totalPayment.toFixed(2)}</span>
+            <strong>PHP {(totalPayment / 2).toFixed(2)}</strong>
           </div>
-          <button type="button" className="primary" onClick={handleBookingReview}>Review payment</button>
+          <button type="button" className="primary" onClick={handleBookingReview}>Review downpayment</button>
         </div>
       ) : null}
     </div>

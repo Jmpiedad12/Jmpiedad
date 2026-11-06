@@ -52,10 +52,89 @@ button:disabled {
   font-size: clamp(1.8rem, 2vw, 2.6rem);
 }
 
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.brand-logo {
+  display: block;
+  width: 240px;
+  height: 74px;
+  flex: 0 0 auto;
+  object-fit: cover;
+  object-position: center;
+}
+
+.topbar-brand h1 {
+  font-size: clamp(1.25rem, 1.7vw, 2rem);
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+}
+
+.venue-hero {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: flex-end;
+  min-height: clamp(210px, 30vw, 340px);
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  border: 1px solid #e5e5e5;
+  border-radius: 20px;
+  background: #171717;
+  box-shadow: 0 14px 36px rgba(20, 20, 20, 0.12);
+}
+
+.venue-hero::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(10, 10, 10, 0.82), rgba(10, 10, 10, 0.36) 58%, rgba(10, 10, 10, 0.08));
+  content: '';
+}
+
+.venue-hero img {
+  position: absolute;
+  z-index: -2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 54%;
+}
+
+.venue-hero-copy {
+  max-width: 38rem;
+  color: #fff;
+}
+
+.venue-hero-copy p {
+  margin: 0 0 0.5rem;
+  color: #fecaca;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.venue-hero-copy h2 {
+  margin: 0;
+  font-size: clamp(1.8rem, 4vw, 3.2rem);
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+.venue-hero-copy span {
+  display: inline-block;
+  margin-top: 0.75rem;
+  color: #f5f5f5;
 }
 
 .user-badge {
@@ -104,6 +183,42 @@ button:disabled {
 .auth-panel,
 .info-panel {
   min-height: 420px;
+}
+
+.info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.info-panel h3 {
+  margin: 0;
+}
+
+.promo-image {
+  display: block;
+  width: min(100%, 340px);
+  max-height: 620px;
+  align-self: center;
+  border: 1px solid #e5e5e5;
+  border-radius: 14px;
+  object-fit: contain;
+  box-shadow: 0 8px 24px rgba(20, 20, 20, 0.12);
+}
+
+.reservation-rules {
+  color: #404040;
+}
+
+.reservation-rules summary {
+  width: fit-content;
+  color: #991b1b;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.reservation-rules ul {
+  margin-top: 0.75rem;
 }
 
 .auth-panel h2,
@@ -314,6 +429,35 @@ select {
 
 .preferred-time-search .booking-form-grid {
   margin-top: 1rem;
+}
+
+.range-booking-tools {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border: 1px solid #e5e5e5;
+  border-left: 3px solid #dc2626;
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+.range-booking-tools h3,
+.range-booking-tools p {
+  margin: 0;
+}
+
+.range-booking-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.range-booking-fields label {
+  display: grid;
+  gap: 0.4rem;
+  color: #404040;
+  font-weight: 600;
 }
 
 .preferred-court-list {
@@ -545,7 +689,7 @@ select {
 }
 
 .admin-requests-panel {
-  grid-column: 1 / -1;
+  align-self: start;
 }
 
 .reservation-card {
@@ -650,9 +794,21 @@ select {
 }
 
 .slot {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
   font-size: 0.72rem;
   padding: 0.35rem 0.45rem;
   border-radius: 8px;
+  border: 1px solid transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slot small {
+  font-size: 0.62rem;
+  opacity: 0.8;
 }
 
 .slot.free {
@@ -663,6 +819,11 @@ select {
 .slot.occupied {
   background: rgba(239, 68, 68, 0.12);
   color: #fecaca;
+}
+
+.slot.selected {
+  background: #dc2626;
+  color: #fff;
 }
 
 @media (max-width: 900px) {
@@ -687,6 +848,10 @@ select {
   .court-time-list {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .range-booking-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 600px) {
@@ -710,7 +875,29 @@ select {
   }
 
   .topbar {
+    align-items: flex-start;
     padding: 1.25rem;
+  }
+
+  .venue-hero {
+    min-height: 220px;
+    padding: 1.25rem;
+    border-radius: 16px;
+  }
+
+  .venue-hero img {
+    object-position: 55% center;
+  }
+
+  .topbar-brand {
+    gap: 0.75rem;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .brand-logo {
+    width: min(100%, 240px);
+    height: 70px;
   }
 
   .topbar-actions {
@@ -739,4 +926,398 @@ select {
   .payment-buttons button {
     flex: 1 1 100%;
   }
+}
+
+.redcourt-app {
+  color: #171717;
+}
+
+.topbar {
+  background: linear-gradient(120deg, #fff, #fafafa);
+  border-color: #e5e5e5;
+  box-shadow: 0 12px 30px rgba(20, 20, 20, 0.08);
+}
+
+.topbar h1 {
+  color: #171717;
+}
+
+.topbar .secondary {
+  background: #fff;
+  color: #262626;
+  border-color: #d4d4d4;
+}
+
+.topbar .secondary:hover {
+  background: #f5f5f5;
+}
+
+.eyebrow,
+.otp-message,
+.status,
+.status--pending {
+  color: #b91c1c;
+}
+
+.user-badge {
+  background: rgba(220, 38, 38, 0.16);
+  color: #fecaca;
+}
+
+.panel,
+.auth-panel,
+.info-panel {
+  background: #fff;
+  color: #171717;
+  border-color: #e5e5e5;
+  box-shadow: 0 14px 38px rgba(20, 20, 20, 0.07);
+}
+
+.auth-form label,
+.booking-form-grid label,
+.panel-header label,
+.sport-filter,
+.booking-date-picker,
+.preferred-time-search summary,
+.info-panel ul {
+  color: #404040;
+}
+
+input,
+select {
+  background: #fff;
+  color: #171717;
+  border-color: #d4d4d4;
+}
+
+input::placeholder {
+  color: #737373;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+.preferred-time-search summary:focus-visible {
+  outline: 2px solid #dc2626;
+  outline-offset: 2px;
+}
+
+.password-toggle,
+.password-toggle:hover {
+  color: #404040;
+}
+
+.otp-token,
+.otp-message {
+  color: #b91c1c;
+}
+
+.otp-token.muted,
+.muted,
+.empty-state,
+.schedule-court-heading span,
+.addon-checkbox small,
+.addon-quantity small,
+.booking-summary span {
+  color: #737373;
+}
+
+.auth-error,
+.secondary.danger {
+  color: #b91c1c;
+}
+
+.auth-notice {
+  color: #404040;
+}
+
+.primary {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  color: #fff;
+}
+
+.secondary {
+  background: #fff;
+  color: #262626;
+  border-color: #d4d4d4;
+}
+
+.secondary:hover {
+  background: #f5f5f5;
+}
+
+.secondary.danger {
+  border-color: #fca5a5;
+}
+
+.preferred-time-search {
+  border-color: #e5e5e5;
+}
+
+.schedule-court.selected {
+  border-color: #dc2626;
+}
+
+.time-slot,
+.court-card,
+.court-option,
+.reservation-card,
+.addon-options {
+  background: #fafafa;
+  color: #262626;
+  border-color: #e5e5e5;
+}
+
+.court-option span {
+  color: #737373;
+}
+
+.court-option.selected {
+  border-color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.court-option:focus-visible {
+  outline-color: #dc2626;
+}
+
+.time-slot.selected {
+  background: #dc2626;
+  color: #fff;
+}
+
+.time-slot.occupied {
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+}
+
+.booking-summary,
+.payment-summary {
+  background: #f5f5f5;
+  border-color: #e5e5e5;
+}
+
+.payment-overlay {
+  background: rgba(10, 10, 10, 0.65);
+}
+
+.quick-booking-bar {
+  background: #171717;
+  border-color: #404040;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+}
+
+.quick-booking-total span {
+  color: #d4d4d4;
+}
+
+.quick-booking-total strong {
+  color: #fff;
+}
+
+.deposit-tag {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.slot.free {
+  background: #f5f5f5;
+  color: #404040;
+}
+
+.skip-link {
+  position: absolute;
+  z-index: 10;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.65rem 0.9rem;
+  transform: translateY(-160%);
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #991b1b;
+  font-weight: 700;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.dashboard-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1.25rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e5e5;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.dashboard-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 9px;
+  color: #991b1b;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.dashboard-nav a:hover,
+.dashboard-nav a:focus-visible {
+  background: #fee2e2;
+  text-decoration: underline;
+}
+
+#main-content,
+.dashboard-nav a {
+  scroll-margin-top: 1rem;
+}
+
+a:focus-visible {
+  outline: 2px solid #dc2626;
+  outline-offset: 3px;
+}
+
+@media (max-width: 600px) {
+  .dashboard-nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .dashboard-nav a {
+    flex: 0 0 auto;
+  }
+}
+
+.slot.occupied {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.slot:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.slot:not(:disabled):hover {
+  border-color: #dc2626;
+}
+
+.schedule-block-tools {
+  display: grid;
+  justify-items: start;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border: 1px solid #e5e5e5;
+  border-radius: 14px;
+  background: #fafafa;
+}
+
+.schedule-block-tools h3,
+.schedule-block-tools p {
+  margin: 0;
+}
+
+.schedule-block-tools label {
+  display: grid;
+  width: min(100%, 28rem);
+  gap: 0.4rem;
+  color: #404040;
+  font-weight: 600;
+}
+
+.admin-dashboard .report-panel {
+  grid-column: 1 / -1;
+}
+
+.report-panel .panel-header {
+  align-items: end;
+}
+
+.status-timeline {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.75rem 0 0;
+  padding: 0 0 0 1rem;
+  border-left: 2px solid #fecaca;
+  list-style: none;
+}
+
+.timeline-step {
+  position: relative;
+  display: grid;
+  gap: 0.1rem;
+  color: #404040;
+}
+
+.timeline-step::before {
+  position: absolute;
+  top: 0.35rem;
+  left: -1.35rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #dc2626;
+  content: '';
+}
+
+.timeline-step strong {
+  color: #991b1b;
+  text-transform: capitalize;
+}
+
+.timeline-step span,
+.timeline-step time {
+  color: #737373;
+  font-size: 0.8rem;
+}
+
+.timeline-step time {
+  font-size: 0.72rem;
+}
+
+.dashboard > .panel,
+.auth-layout > .auth-panel,
+.auth-layout > .info-panel {
+  border-top: 3px solid #dc2626;
+}
+
+.panel-header {
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.panel-header h2,
+.panel-header h3,
+.court-card h3,
+.reservation-card h3,
+.addon-options h3 {
+  color: #171717;
+}
+
+.court-card,
+.reservation-card,
+.addon-options {
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(20, 20, 20, 0.045);
+}
+
+.reservation-card {
+  border-left: 3px solid #dc2626;
+}
+
+.booking-summary,
+.payment-summary {
+  border-left: 3px solid #dc2626;
+}
+
+.slot.free {
+  background: #f5f5f5;
+  color: #404040;
 }

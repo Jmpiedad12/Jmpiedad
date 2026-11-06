@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 const PORT = Number(process.env.AUTH_PORT || 4174)
@@ -8,9 +9,8 @@ const SESSION_DURATION = 8 * 60 * 60 * 1000
 const OTP_DURATION = 10 * 60 * 1000
 const ADMIN_LIMIT = 5
 const DATA_DIRECTORY = path.join(process.cwd(), '.redcourt-data')
-const ACCOUNTS_PATH = path.join(DATA_DIRECTORY, 'accounts.json')
-const BOOKINGS_PATH = path.join(DATA_DIRECTORY, 'bookings.json')
-const HOURLY_RATES = { Pickleball: 200, Badminton: 175 }
+const DATABASE_PATH = path.join(DATA_DIRECTORY, 'redcourt.sqlite')
+const HOURLY_RATES = { Pickleball: 400, Badminton: 350 }
 const RACKET_RENTAL_PER_DAY = 100
 const SHUTTLECOCK_PRICE = 140
 const COURT_SPORTS = {
@@ -31,22 +31,59 @@ const authAttempts = new Map()
 const otpAttempts = new Map()
 
 mkdirSync(DATA_DIRECTORY, { recursive: true })
-if (!existsSync(ACCOUNTS_PATH)) writeFileSync(ACCOUNTS_PATH, '[]\n', { flag: 'wx' })
-if (!existsSync(BOOKINGS_PATH)) writeFileSync(BOOKINGS_PATH, '[]\n', { flag: 'wx' })
-
-const readAccounts = () => JSON.parse(readFileSync(ACCOUNTS_PATH, 'utf8'))
-const readBookings = () => JSON.parse(readFileSync(BOOKINGS_PATH, 'utf8'))
-
-const saveAccounts = (accounts) => {
-  const temporaryPath = `${ACCOUNTS_PATH}.tmp`
-  writeFileSync(temporaryPath, `${JSON.stringify(accounts, null, 2)}\n`, { mode: 0o600 })
-  renameSync(temporaryPath, ACCOUNTS_PATH)
+const database = new DatabaseSync(DATABASE_PATH)
+database.exec('CREATE TABLE IF NOT EXISTS app_data (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+const readStoredValue = database.prepare('SELECT value FROM app_data WHERE key = ?')
+const writeStoredValue = database.prepare('INSERT INTO app_data (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+const initializeStoredValue = (key, legacyFile) => {
+  if (readStoredValue.get(key)) return
+  const value = existsSync(legacyFile) ? readFileSync(legacyFile, 'utf8') : '[]'
+  JSON.parse(value)
+  writeStoredValue.run(key, value)
 }
 
-const saveBookings = (bookings) => {
-  const temporaryPath = `${BOOKINGS_PATH}.tmp`
-  writeFileSync(temporaryPath, `${JSON.stringify(bookings, null, 2)}\n`, { mode: 0o600 })
-  renameSync(temporaryPath, BOOKINGS_PATH)
+initializeStoredValue('accounts', path.join(DATA_DIRECTORY, 'accounts.json'))
+initializeStoredValue('bookings', path.join(DATA_DIRECTORY, 'bookings.json'))
+initializeStoredValue('blocks', path.join(DATA_DIRECTORY, 'blocks.json'))
+
+const readAccounts = () => JSON.parse(readStoredValue.get('accounts').value)
+const readBlocks = () => JSON.parse(readStoredValue.get('blocks').value)
+const saveAccounts = (accounts) => writeStoredValue.run('accounts', JSON.stringify(accounts))
+const saveBookings = (bookings) => writeStoredValue.run('bookings', JSON.stringify(bookings))
+const saveBlocks = (blocks) => writeStoredValue.run('blocks', JSON.stringify(blocks))
+
+const readBookings = () => {
+  const bookings = JSON.parse(readStoredValue.get('bookings').value)
+  const now = Date.now()
+  let changed = false
+  for (const booking of bookings) {
+    if (!Array.isArray(booking.statusHistory)) {
+      booking.statusHistory = [{
+        status: booking.status,
+        at: booking.createdAt || `${booking.date}T00:00:00.000Z`,
+        message: 'Reservation status recorded',
+      }]
+      changed = true
+    }
+
+    if (booking.status !== 'confirmed') continue
+    const lastHour = bookingSlots(booking).reduce((latest, slot) => (
+      Math.max(latest, Number(slot.time.slice(0, 2)) + 1)
+    ), 0)
+    if (!lastHour) continue
+    const endTime = Date.parse(`${booking.date}T${String(lastHour).padStart(2, '0')}:00:00+08:00`)
+    if (!Number.isFinite(endTime) || endTime > now) continue
+    booking.status = 'completed'
+    booking.statusUpdatedAt = new Date(now).toISOString()
+    booking.statusHistory.push({
+      status: 'completed',
+      at: booking.statusUpdatedAt,
+      message: 'Reservation completed after the scheduled court time.',
+    })
+    changed = true
+  }
+  if (changed) saveBookings(bookings)
+  return bookings
 }
 
 const bookingSlots = (booking) => booking.slots ?? (
@@ -54,6 +91,8 @@ const bookingSlots = (booking) => booking.slots ?? (
     ? []
     : (booking.times ?? (booking.time ? [booking.time] : [])).map((time) => ({ courtId: booking.courtId, time }))
 )
+
+const reservationOccupiesSlot = (status) => ['pending', 'confirmed'].includes(status)
 
 const validBookingSlots = (slots, sport, allowEmpty = false) => (
   Array.isArray(slots) && slots.length <= 36 && (allowEmpty || slots.length > 0) &&
@@ -64,14 +103,40 @@ const validBookingSlots = (slots, sport, allowEmpty = false) => (
 )
 
 const hasBookingConflict = (bookings, date, slots, ignoreId = null) => bookings.some((booking) => (
-  booking.id !== ignoreId && booking.date === date && ['pending', 'confirmed'].includes(booking.status) &&
+  booking.id !== ignoreId && booking.date === date && reservationOccupiesSlot(booking.status) &&
   bookingSlots(booking).some((existingSlot) => slots.some((slot) => (
     slot.courtId === existingSlot.courtId && slot.time === existingSlot.time
   )))
-))
+)) || readBlocks().some((block) => block.date === date && block.slots.some((blockedSlot) => (
+  slots.some((slot) => slot.courtId === blockedSlot.courtId && slot.time === blockedSlot.time)
+)))
+
+const validScheduleSlots = (slots) => (
+  Array.isArray(slots) && slots.length > 0 && slots.length <= 36 &&
+  slots.every((slot) => Number.isInteger(slot?.courtId) && COURT_SPORTS[slot.courtId] && BOOKING_TIMES.has(slot.time)) &&
+  new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length
+)
 
 const validBookingDate = (date) => (
-  /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+  /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+  !Number.isNaN(Date.parse(`${date}T00:00:00Z`)) &&
+  new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date
+)
+
+const manilaToday = () => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const part = (type) => parts.find((item) => item.type === type).value
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+const isFutureBooking = (date, slots) => (
+  date >= manilaToday() &&
+  slots.every((slot) => Date.parse(`${date}T${slot.time}:00+08:00`) > Date.now())
 )
 
 const hashPassword = (password, salt = randomBytes(16).toString('hex')) => ({
@@ -200,6 +265,47 @@ const deliverSms = async (contact, message) => {
   if (!result.ok) throw new Error('The SMS provider could not send the message.')
 }
 
+const deliverEmail = async (contact, subject, message) => {
+  const { RESEND_API_KEY, RESEND_FROM } = process.env
+  if (!RESEND_API_KEY || !RESEND_FROM) throw new Error('Email delivery is not configured on the server.')
+  const result = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: RESEND_FROM, to: [contact], subject, text: message }),
+  })
+  if (!result.ok) throw new Error('The email provider could not send the reservation update.')
+}
+
+const notifyBookingStatus = async (booking, account) => {
+  const approved = booking.status === 'confirmed'
+  const statusText = approved ? 'approved' : 'rejected'
+  const day = new Intl.DateTimeFormat('en-PH', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(`${booking.date}T00:00:00Z`))
+  const courtTimes = bookingSlots(booking).map((slot) => `Court ${slot.courtId} ${slot.time}`).join(', ')
+  const message = `Hi ${account.name?.trim() || account.username}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was ${statusText}.${approved ? '' : ' Your downpayment will be handled according to the refund policy.'}`
+
+  if (account.email && process.env.RESEND_API_KEY && process.env.RESEND_FROM) {
+    try {
+      await deliverEmail(account.email, `Red Court reservation ${statusText}`, message)
+    } catch (error) {
+      console.error(`Reservation email notification failed for booking ${booking.id}:`, error)
+    }
+  }
+  const phone = account.phone || (isPhone(account.contact || '') ? account.contact : '')
+  if (phone && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+    try {
+      await deliverSms(phone, message)
+    } catch (error) {
+      console.error(`Reservation SMS notification failed for booking ${booking.id}:`, error)
+    }
+  }
+}
+
 const deliverOtp = async (contact, code) => {
   if (isEmail(contact)) {
     const { RESEND_API_KEY, RESEND_FROM } = process.env
@@ -252,9 +358,65 @@ const startSession = (response, account) => {
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost')
-  const route = `${request.method} ${url.pathname}`
+  const pathname = url.pathname.replace(/\/+$/, '') || '/'
+  const route = `${request.method} ${pathname}`
 
   try {
+    if (route === 'GET /api/blocks') {
+      const session = readSession(request)
+      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to view the court schedule.' })
+      return sendJson(response, 200, { blocks: readBlocks() })
+    }
+
+    if (route === 'POST /api/admin/blocks') {
+      const session = readSession(request)
+      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const body = await readBody(request)
+      const date = String(body.date || '')
+      const slots = Array.isArray(body.slots) ? body.slots : []
+      const reason = String(body.reason || '').trim()
+      if (!validBookingDate(date) || !validScheduleSlots(slots) || reason.length < 3 || reason.length > 120) {
+        return sendJson(response, 400, { error: 'Enter a valid date, at least one court time, and a reason of 3-120 characters.' })
+      }
+
+      const bookings = readBookings()
+      if (bookings.some((booking) => booking.date === date && reservationOccupiesSlot(booking.status) &&
+        bookingSlots(booking).some((existing) => slots.some((slot) => slot.courtId === existing.courtId && slot.time === existing.time)))) {
+        return sendJson(response, 409, { error: 'A selected court time already has a reservation.' })
+      }
+      if (hasBookingConflict([], date, slots)) {
+        return sendJson(response, 409, { error: 'A selected court time is already blocked.' })
+      }
+
+      const block = {
+        id: randomBytes(12).toString('hex'),
+        date,
+        slots,
+        reason,
+        createdAt: new Date().toISOString(),
+        createdBy: session.account.username,
+      }
+      const blocks = readBlocks()
+      blocks.push(block)
+      saveBlocks(blocks)
+      return sendJson(response, 201, { block })
+    }
+
+    const blockAction = request.method === 'DELETE'
+      ? pathname.match(/^\/api\/admin\/blocks\/([^/]+)$/)
+      : null
+    if (blockAction) {
+      const session = readSession(request)
+      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const blockId = decodeURIComponent(blockAction[1])
+      const blocks = readBlocks()
+      const index = blocks.findIndex((block) => block.id === blockId)
+      if (index === -1) return sendJson(response, 404, { error: 'Schedule block not found.' })
+      blocks.splice(index, 1)
+      saveBlocks(blocks)
+      return sendJson(response, 200, { ok: true })
+    }
+
     if (route === 'GET /api/bookings') {
       const session = readSession(request)
       if (!session?.account) return sendJson(response, 401, { error: 'Sign in to view reservations.' })
@@ -285,6 +447,9 @@ const server = createServer(async (request, response) => {
       if (!validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !validBookingSlots(slots, sport, true)) {
         return sendJson(response, 400, { error: 'Reservation date, sport, or time slots are invalid.' })
       }
+      if (!isFutureBooking(date, slots)) {
+        return sendJson(response, 400, { error: 'Choose a future date and time for your reservation.' })
+      }
       if (!Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100) {
         return sendJson(response, 400, { error: 'Shuttlecock quantity must be between 0 and 100.' })
       }
@@ -300,18 +465,27 @@ const server = createServer(async (request, response) => {
         return sendJson(response, 409, { error: 'One or more selected court times were just reserved. Refresh availability and choose another slot.' })
       }
 
+      const totalPrice = HOURLY_RATES[sport] * slots.length
+        + (racketRental ? RACKET_RENTAL_PER_DAY : 0)
+        + shuttlecockQuantity * SHUTTLECOCK_PRICE
       const booking = {
         id: randomBytes(12).toString('hex'),
         user: account.username,
         date,
         slots,
         sport,
-        deposit: HOURLY_RATES[sport] * slots.length
-          + (racketRental ? RACKET_RENTAL_PER_DAY : 0)
-          + shuttlecockQuantity * SHUTTLECOCK_PRICE,
+        totalPrice,
+        deposit: totalPrice / 2,
         racketRental,
         shuttlecockQuantity,
         status: 'pending',
+        createdAt: new Date().toISOString(),
+        statusUpdatedAt: new Date().toISOString(),
+        statusHistory: [{
+          status: 'pending',
+          at: new Date().toISOString(),
+          message: 'Reservation request submitted and awaiting administrator review.',
+        }],
         refundIssued: false,
       }
       bookings.unshift(booking)
@@ -338,11 +512,11 @@ const server = createServer(async (request, response) => {
         const slots = bookingSlots(legacy)
         const racketRental = legacy.racketRental === true
         const shuttlecockQuantity = Number(legacy.shuttlecockQuantity || 0)
-        const status = ['pending', 'confirmed', 'cancelled', 'rejected'].includes(legacy.status) ? legacy.status : null
+        const status = ['pending', 'confirmed', 'cancelled', 'rejected', 'completed'].includes(legacy.status) ? legacy.status : null
         if (!account || !validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !status ||
           !validBookingSlots(slots, sport, true) || !Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100 ||
           (slots.length === 0 && !racketRental && shuttlecockQuantity === 0)) continue
-        if (['pending', 'confirmed'].includes(status) && hasBookingConflict(bookings, date, slots)) {
+        if (reservationOccupiesSlot(status) && hasBookingConflict(bookings, date, slots)) {
           skippedConflicts += 1
           continue
         }
@@ -353,9 +527,17 @@ const server = createServer(async (request, response) => {
           slots,
           sport,
           deposit: Number.isFinite(Number(legacy.deposit)) ? Number(legacy.deposit) : 0,
+          totalPrice: Number.isFinite(Number(legacy.totalPrice)) ? Number(legacy.totalPrice) : undefined,
           racketRental,
           shuttlecockQuantity,
           status,
+          createdAt: legacy.createdAt || new Date().toISOString(),
+          statusUpdatedAt: legacy.statusUpdatedAt || new Date().toISOString(),
+          statusHistory: Array.isArray(legacy.statusHistory) ? legacy.statusHistory : [{
+            status,
+            at: legacy.createdAt || new Date().toISOString(),
+            message: 'Reservation status recorded',
+          }],
           refundIssued: legacy.refundIssued === true,
         })
         existingIds.add(legacy.id)
@@ -367,7 +549,7 @@ const server = createServer(async (request, response) => {
     }
 
     const bookingAction = request.method === 'POST'
-      ? url.pathname.match(/^\/api\/bookings\/([^/]+)\/(confirm|reject|cancel)$/)
+      ? pathname.match(/^\/api\/bookings\/([^/]+)\/(confirm|reject|cancel)$/)
       : null
     if (bookingAction) {
       const session = readSession(request)
@@ -378,6 +560,7 @@ const server = createServer(async (request, response) => {
       const index = bookings.findIndex((booking) => booking.id === bookingId)
       if (index === -1) return sendJson(response, 404, { error: 'Reservation not found.' })
       const booking = bookings[index]
+      let notifyPlayer = false
 
       if (action === 'cancel') {
         if (session.account.role !== 'player' || booking.user !== session.account.username) {
@@ -388,6 +571,12 @@ const server = createServer(async (request, response) => {
         }
         booking.status = 'cancelled'
         booking.refundIssued = false
+        booking.statusUpdatedAt = new Date().toISOString()
+        booking.statusHistory.push({
+          status: 'cancelled',
+          at: booking.statusUpdatedAt,
+          message: 'Reservation cancelled by the player.',
+        })
       } else {
         if (session.account.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
         if (action === 'confirm' && booking.status !== 'pending') {
@@ -398,9 +587,22 @@ const server = createServer(async (request, response) => {
         }
         booking.status = action === 'confirm' ? 'confirmed' : 'rejected'
         booking.refundIssued = action === 'reject'
+        booking.statusUpdatedAt = new Date().toISOString()
+        booking.statusHistory.push({
+          status: booking.status,
+          at: booking.statusUpdatedAt,
+          message: action === 'confirm'
+            ? 'Reservation approved by the administrator.'
+            : 'Reservation rejected by the administrator.',
+        })
+        notifyPlayer = true
       }
 
       saveBookings(bookings)
+      if (notifyPlayer) {
+        const account = readAccounts().find((item) => item.username.toLowerCase() === booking.user.toLowerCase())
+        if (account) await notifyBookingStatus(booking, account)
+      }
       return sendJson(response, 200, { booking })
     }
 
@@ -444,46 +646,6 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, { user: publicAccount(accounts[accountIndex]) })
     }
 
-    if (route === 'POST /api/admin/reservations/confirmed') {
-      const session = readSession(request)
-      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
-
-      const body = await readBody(request)
-      const username = String(body.username || '').trim()
-      const date = String(body.date || '').trim()
-      const slots = Array.isArray(body.slots) ? body.slots : []
-      const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
-      const validSlots = slots.length > 0 && slots.length <= 36 && slots.every((slot) => (
-        Number.isInteger(slot.courtId) && slot.courtId >= 1 && slot.courtId <= 9 &&
-        /^(?:0[89]|1\d|2[01]):00$/.test(String(slot.time))
-      ))
-      if (!username || !validDate || !validSlots) {
-        return sendJson(response, 400, { error: 'Reservation confirmation details are invalid.' })
-      }
-
-      const account = readAccounts().find((item) => (
-        item.username.toLowerCase() === username.toLowerCase() && item.role === 'player'
-      ))
-      if (!account) return sendJson(response, 404, { error: 'Player account not found.' })
-      const phone = account.phone || (isPhone(account.contact || '') ? account.contact : '')
-      if (!isPhone(phone || '')) return sendJson(response, 400, { error: 'This user has no valid contact number on their account.' })
-
-      const day = new Intl.DateTimeFormat('en-PH', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        timeZone: 'UTC',
-      }).format(new Date(`${date}T00:00:00Z`))
-      const courtTimes = [...new Set(slots.map((slot) => slot.courtId))].map((courtId) => {
-        const times = slots.filter((slot) => slot.courtId === courtId).map((slot) => slot.time).join(', ')
-        return `Court ${courtId} at ${times}`
-      }).join('; ')
-      const name = account.name?.trim() || account.username
-      await deliverSms(phone, `Hi ${name}, your Red Court reservation is confirmed for ${day}: ${courtTimes}.`)
-      return sendJson(response, 200, { ok: true, phoneLastFour: phone.replace(/\D/g, '').slice(-4) })
-    }
-
     if (route === 'POST /api/auth/otp') {
       const body = await readBody(request)
       const contact = normalizeContact(String(body.contact || ''))
@@ -499,22 +661,29 @@ const server = createServer(async (request, response) => {
 
     if (route === 'POST /api/auth/register') {
       const body = await readBody(request)
+      const name = String(body.name || '').trim()
       const username = String(body.username || '').trim()
       const password = String(body.password || '')
-      const contact = normalizeContact(String(body.contact || ''))
+      const phone = normalizeContact(String(body.phone || ''))
+      const email = normalizeContact(String(body.email || ''))
       const otp = String(body.otp || '')
+      if (name.length < 2 || name.length > 100) {
+        return sendJson(response, 400, { error: 'Name must be between 2 and 100 characters.' })
+      }
       if (!/^[A-Za-z0-9_.-]{3,32}$/.test(username)) {
         return sendJson(response, 400, { error: 'Username must be 3-32 characters using letters, numbers, dots, dashes or underscores.' })
       }
       if (password.length < 10) return sendJson(response, 400, { error: 'Password must be at least 10 characters.' })
+      if (!isPhone(phone)) return sendJson(response, 400, { error: 'Enter a valid contact number.' })
+      if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
 
-      const pending = pendingOtps.get(contact)
+      const pending = pendingOtps.get(phone)
       const submittedHash = createHash('sha256').update(otp).digest('hex')
       const hashesMatch = pending && timingSafeEqual(Buffer.from(pending.hash, 'hex'), Buffer.from(submittedHash, 'hex'))
       if (!pending || pending.expiresAt <= Date.now() || !hashesMatch || !/^\d{6}$/.test(otp)) {
         if (pending) {
           pending.attempts += 1
-          if (pending.attempts >= 5) pendingOtps.delete(contact)
+          if (pending.attempts >= 5) pendingOtps.delete(phone)
         }
         return sendJson(response, 400, { error: 'The OTP is invalid or expired.' })
       }
@@ -523,8 +692,10 @@ const server = createServer(async (request, response) => {
       if (accounts.some((account) => account.username.toLowerCase() === username.toLowerCase())) {
         return sendJson(response, 409, { error: 'That username is already in use.' })
       }
-      if (accounts.some((account) => account.contact === contact)) {
-        return sendJson(response, 409, { error: 'That email or phone number is already in use.' })
+      if (accounts.some((account) => (
+        account.phone === phone || account.email === email || account.contact === phone || account.contact === email
+      ))) {
+        return sendJson(response, 409, { error: 'That email address or contact number is already in use.' })
       }
 
       const role = body.role === 'admin' ? 'admin-pending' : 'player'
@@ -533,10 +704,10 @@ const server = createServer(async (request, response) => {
       }
 
       const credentials = hashPassword(password)
-      const account = { username, role, contact, ...credentials }
+      const account = { username, role, name, phone, email, contact: phone, ...credentials }
       accounts.push(account)
       saveAccounts(accounts)
-      pendingOtps.delete(contact)
+      pendingOtps.delete(phone)
       if (role === 'admin-pending') {
         return sendJson(response, 202, { pendingApproval: true, message: 'Your admin account request was sent for approval.' })
       }
@@ -583,7 +754,7 @@ const server = createServer(async (request, response) => {
     }
 
     const adminRequestAction = request.method === 'POST'
-      ? url.pathname.match(/^\/api\/admin\/requests\/([^/]+)\/(approve|reject)$/)
+      ? pathname.match(/^\/api\/admin\/requests\/([^/]+)\/(approve|reject)$/)
       : null
     if (adminRequestAction) {
       const session = readSession(request)
