@@ -1,183 +1,34 @@
 import { useEffect, useState } from 'preact/hooks'
 import './app.css'
-
-const COURTS = [
-  { id: 1, name: 'Court 1', sports: ['Pickleball', 'Badminton'] },
-  { id: 2, name: 'Court 2', sports: ['Pickleball', 'Badminton'] },
-  { id: 3, name: 'Court 3', sports: ['Pickleball', 'Badminton'] },
-  { id: 4, name: 'Court 4', sports: ['Badminton'] },
-  { id: 5, name: 'Court 5', sports: ['Badminton'] },
-  { id: 6, name: 'Court 6', sports: ['Badminton'] },
-  { id: 7, name: 'Court 7', sports: ['Badminton'] },
-  { id: 8, name: 'Court 8', sports: ['Badminton'] },
-  { id: 9, name: 'Court 9', sports: ['Badminton'] },
-]
-
-const HOURLY_RATES = { Pickleball: 400, Badminton: 350 }
-const RACKET_RENTAL_PER_DAY = 100
-const SHUTTLECOCK_PRICE = 140
-const SPORTS = ['Pickleball', 'Badminton']
-
-const HOURS = [
-  '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00',
-  '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00',
-]
-
-const formatClockTime = (time: string) => {
-  const hour = Number(time.slice(0, 2))
-  return `${hour % 12 || 12} ${hour < 12 ? 'AM' : 'PM'}`
-}
-
-const formatTimeRange = (time: string) => {
-  const hour = Number(time.slice(0, 2))
-  const nextHour = hour + 1
-  const formatHour = (value: number) => String(value % 12 || 12)
-  const startPeriod = hour < 12 ? 'AM' : 'PM'
-  const endPeriod = nextHour < 12 ? 'AM' : 'PM'
-  const start = `${formatHour(hour)}${startPeriod !== endPeriod ? ` ${startPeriod}` : ''}`
-  return `${start}–${formatHour(nextHour)} ${endPeriod}`
-}
-
-const formatInputDate = (date: Date) => {
-  const offset = date.getTimezoneOffset() * 60000
-  return new Date(date.getTime() - offset).toISOString().slice(0, 10)
-}
-
-const formatDate = (date: string) => {
-  const [year, month, day] = date.split('-').map(Number)
-  const parsedDate = new Date(Date.UTC(year, month - 1, day))
-  if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) return date
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(parsedDate)
-}
-
-const formatDateTime = (dateTime: string) => new Intl.DateTimeFormat('en-US', {
-  month: 'long',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-}).format(new Date(dateTime))
-
-const reportDateRange = (date: string, period: 'day' | 'week' | 'month') => {
-  const [year, month, day] = date.split('-').map(Number)
-  const start = new Date(Date.UTC(year, month - 1, day))
-  if (period === 'week') start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7))
-  if (period === 'month') start.setUTCDate(1)
-  const end = new Date(start)
-  if (period === 'month') end.setUTCMonth(end.getUTCMonth() + 1)
-  else end.setUTCDate(end.getUTCDate() + (period === 'week' ? 7 : 1))
-  end.setUTCDate(end.getUTCDate() - 1)
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) }
-}
-
-const bookingStatusLabel = (status: string) => status === 'confirmed' ? 'approved' : status
-const reservationOccupiesSlot = (status: string) => status === 'pending' || status === 'confirmed'
-const slotStatusLabel = (status: string) => ({
-  pending: 'Pending approval',
-  confirmed: 'Reserved',
-  completed: 'Completed',
-}[status] || status)
-
-const addDays = (days: number) => {
-  const date = new Date()
-  date.setDate(date.getDate() + days)
-  return formatInputDate(date)
-}
-
-const slotIsInFuture = (date: string, time: string) => Date.parse(`${date}T${time}:00+08:00`) > Date.now()
-
-type BookingSlot = { courtId: number; time: string }
-
-type Booking = {
-  id: string
-  user: string
-  date: string
-  courtId?: number | null
-  time?: string
-  times?: string[]
-  slots?: BookingSlot[]
-  sport: string
-  deposit: number
-  totalPrice?: number
-  racketRental?: boolean
-  shuttlecockQuantity?: number
-  status: string
-  createdAt?: string
-  statusHistory?: { status: string; at: string; message: string }[]
-  refundIssued: boolean
-}
-
-type ScheduleBlock = {
-  id: string
-  date: string
-  slots: BookingSlot[]
-  reason: string
-}
-
-const bookingTimes = (booking: Booking) => booking.times ?? (booking.time ? [booking.time] : [])
-const bookingSlots = (booking: Booking): BookingSlot[] => booking.slots ?? (
-  booking.courtId == null ? [] : bookingTimes(booking).map((time) => ({ courtId: booking.courtId as number, time }))
-)
-const slotSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
-  .map((courtId) => `${COURTS.find((court) => court.id === courtId)?.name}: ${slots.filter((slot) => slot.courtId === courtId).map((slot) => formatTimeRange(slot.time)).join(', ')}`)
-  .join(' · ')
-const courtSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
-  .map((courtId) => COURTS.find((court) => court.id === courtId)?.name)
-  .filter(Boolean)
-  .join(', ')
-const bookingAddOns = (booking: Booking) => [
-  booking.racketRental ? `Racket rental (PHP ${RACKET_RENTAL_PER_DAY}/day)` : null,
-  booking.shuttlecockQuantity ? `Shuttlecock ×${booking.shuttlecockQuantity} (PHP ${SHUTTLECOCK_PRICE} each)` : null,
-].filter(Boolean).join(' · ')
-
-const defaultAuth = {
-  name: '',
-  username: '',
-  password: '',
-  phone: '',
-  email: '',
-  otp: '',
-}
-
-type AccountProfile = {
-  name: string
-  birthdate: string
-  phone: string
-  email: string
-}
-
-type SignedInUser = AccountProfile & { username: string; role: 'player' | 'admin' }
-
-const emptyAccountProfile: AccountProfile = { name: '', birthdate: '', phone: '', email: '' }
-const profileFromAccount = (account: Partial<AccountProfile>): AccountProfile => ({
-  name: account.name || '',
-  birthdate: account.birthdate || '',
-  phone: account.phone || '',
-  email: account.email || '',
-})
-
-const ReservationTimeline = ({ booking }: { booking: Booking }) => {
-  const history = booking.statusHistory?.length
-    ? booking.statusHistory
-    : [{ status: booking.status, at: booking.createdAt || '', message: 'Reservation status recorded.' }]
-
-  return (
-    <ol className="status-timeline" aria-label="Reservation status timeline">
-      {history.map((entry, index) => (
-        <li className={`timeline-step ${entry.status}`} key={`${entry.status}-${entry.at}-${index}`}>
-          <strong>{bookingStatusLabel(entry.status)}</strong>
-          <span>{entry.message}</span>
-          {entry.at ? <time dateTime={entry.at}>{formatDateTime(entry.at)}</time> : null}
-        </li>
-      ))}
-    </ol>
-  )
-}
+import {
+  addDays,
+  COURTS,
+  formatClockTime,
+  formatDate,
+  formatTimeRange,
+  HOURS,
+  HOURLY_RATES,
+  RACKET_RENTAL_PER_DAY,
+  reportDateRange,
+  SHUTTLECOCK_PRICE,
+  slotIsInFuture,
+  SPORTS,
+} from './features/courts/schedule'
+import { defaultAuth, emptyAccountProfile, profileFromAccount } from './features/accounts/account'
+import type { SignedInUser } from './features/accounts/account'
+import { AccountProfileView, AuthenticationView } from './features/accounts/AccountViews'
+import { DashboardNavigation } from './features/navigation/DashboardNavigation'
+import { ReservationTimeline } from './features/reservations/ReservationTimeline'
+import {
+  bookingAddOns,
+  bookingSlots,
+  bookingStatusLabel,
+  courtSummary,
+  reservationOccupiesSlot,
+  slotStatusLabel,
+  slotSummary,
+} from './features/reservations/reservations'
+import type { Booking, BookingSlot, ScheduleBlock } from './features/reservations/reservations'
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<SignedInUser | null>(null)
@@ -390,6 +241,7 @@ export function App() {
     ])
   }
 
+  // Increment 2: user account, registration, and profile workflows.
   const generateOtp = async () => {
     setOtpSent(false)
     setOtpMessage('Sending OTP...')
@@ -513,6 +365,7 @@ export function App() {
     }
   }
 
+  // Increment 4: reservation creation, payment review, and cancellation.
   const handleBookingReview = () => {
     if (!currentUser || currentUser.role !== 'player') {
       window.alert('Log in as a player to reserve a court.')
@@ -623,6 +476,7 @@ export function App() {
     }
   }
 
+  // Increment 3 and 5: court schedule updates and administrator actions.
   const handleBlockSlots = async () => {
     setBlockError('')
     if (selectedBlockSlots.length === 0 || blockReason.trim().length < 3) {
@@ -714,6 +568,7 @@ export function App() {
 
   const adminReservations = [...bookings].sort((a, b) => a.date.localeCompare(b.date))
 
+  // Increment 6: connect the feature views into the complete website.
   return (
     <div class="redcourt-app">
       <a className="skip-link" href="#main-content">Skip to main content</a>
@@ -754,221 +609,35 @@ export function App() {
       )}
 
       {currentUser && !isManagingAccount ? (
-        <nav className="dashboard-nav" aria-label="Dashboard navigation">
-          {currentUser.role === 'admin' ? (
-            <>
-              <a href="#admin-schedule">Court schedule</a>
-              <a href="#admin-reports">Reports</a>
-              <a href="#admin-reservations">Reservations</a>
-              <a href="#admin-accounts">Admin requests</a>
-            </>
-          ) : (
-            <>
-              <a href="#player-booking">Book a court</a>
-              <a href="#player-reservations">My reservations</a>
-            </>
-          )}
-        </nav>
+        <DashboardNavigation user={currentUser} />
       ) : null}
 
       {currentUser && isManagingAccount ? (
-        <main className="profile-layout">
-          <section className="panel profile-panel" id="main-content">
-            <h2>Manage account</h2>
-            <p className="muted">Update the personal details saved with your account.</p>
-            <form className="auth-form" onSubmit={handleProfileSave}>
-              <label>
-                Name
-                <input
-                  type="text"
-                  autoComplete="name"
-                  required
-                  minLength={2}
-                  maxLength={100}
-                  value={accountProfile.name}
-                  onInput={(e) => setAccountProfile({ ...accountProfile, name: (e.target as HTMLInputElement).value })}
-                />
-              </label>
-              <label>
-                Birthdate
-                <input
-                  type="date"
-                  autoComplete="bday"
-                  required
-                  max={addDays(0)}
-                  value={accountProfile.birthdate}
-                  onInput={(e) => setAccountProfile({ ...accountProfile, birthdate: (e.target as HTMLInputElement).value })}
-                />
-              </label>
-              <label>
-                Contact number
-                <input
-                  type="tel"
-                  autoComplete="tel"
-                  required
-                  value={accountProfile.phone}
-                  onInput={(e) => setAccountProfile({ ...accountProfile, phone: (e.target as HTMLInputElement).value })}
-                />
-              </label>
-              <label>
-                Email address
-                <input
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={accountProfile.email}
-                  onInput={(e) => setAccountProfile({ ...accountProfile, email: (e.target as HTMLInputElement).value })}
-                />
-              </label>
-              {profileError ? <p className="auth-error" role="alert">{profileError}</p> : null}
-              {profileMessage ? <p className="auth-notice" role="status">{profileMessage}</p> : null}
-              <button type="submit" className="primary wide">Save account details</button>
-            </form>
-          </section>
-        </main>
+        <AccountProfileView
+          profile={accountProfile}
+          error={profileError}
+          message={profileMessage}
+          onChange={(field, value) => setAccountProfile((previous) => ({ ...previous, [field]: value }))}
+          onSubmit={handleProfileSave}
+        />
       ) : !currentUser ? (
-        <main className="auth-layout" id="main-content">
-          <section className="auth-panel">
-            <h2>{authMode === 'login' ? `${authRole === 'admin' ? 'Admin' : 'Player'} login` : registrationRole === 'admin' ? 'Request admin account' : 'Create account'}</h2>
-            <p>{authMode === 'login'
-              ? 'Log in with your username and password.'
-              : registrationRole === 'admin'
-                ? `Admin requests need approval from an existing admin. The limit is ${adminLimit} admin accounts.`
-                : 'Create an account with your username, password and verified contact.'}</p>
-
-            {authMode === 'signup' && (
-              <div className="role-switch" aria-label="Account type">
-                <button type="button" className={registrationRole === 'player' ? 'primary' : 'secondary'} onClick={() => setRegistrationRole('player')}>Player Account</button>
-                <button type="button" className={registrationRole === 'admin' ? 'primary' : 'secondary'} onClick={() => setRegistrationRole('admin')}>Request Admin</button>
-              </div>
-            )}
-
-            <form className="auth-form" onSubmit={handleAuthSubmit}>
-              <label>
-                Username
-                <input
-                  type="text"
-                  autoComplete="username"
-                  required
-                  minLength={3}
-                  maxLength={32}
-                  pattern="[A-Za-z0-9_.-]+"
-                  value={authForm.username}
-                  onInput={(e) => setAuthForm({ ...authForm, username: (e.target as HTMLInputElement).value })}
-                  placeholder="playername"
-                />
-              </label>
-
-              <label>
-                Password
-                <span className="password-input-wrap">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
-                    required
-                    minLength={authMode === 'signup' ? 10 : undefined}
-                    value={authForm.password}
-                    onInput={(e) => setAuthForm({ ...authForm, password: (e.target as HTMLInputElement).value })}
-                    placeholder="Your password"
-                  />
-                  <button
-                    type="button"
-                    className="password-toggle"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    title={showPassword ? 'Hide password' : 'Show password'}
-                    onClick={() => setShowPassword((visible) => !visible)}
-                  >
-                    <span className="eye-icon" aria-hidden="true" />
-                  </button>
-                </span>
-              </label>
-
-              {authMode === 'signup' && (
-                <>
-                  <label>
-                    Full name
-                    <input
-                      type="text"
-                      autoComplete="name"
-                      required
-                      minLength={2}
-                      maxLength={100}
-                      value={authForm.name}
-                      onInput={(e) => setAuthForm({ ...authForm, name: (e.target as HTMLInputElement).value })}
-                      placeholder="Your full name"
-                    />
-                  </label>
-
-                  <label>
-                    Contact number
-                    <input
-                      type="tel"
-                      autoComplete="tel"
-                      required
-                      pattern="\+?[\d\s()-]{7,20}"
-                      value={authForm.phone}
-                      onInput={(e) => setAuthForm({ ...authForm, phone: (e.target as HTMLInputElement).value })}
-                      placeholder="+63 912 345 6789"
-                    />
-                  </label>
-
-                  <label>
-                    Email address
-                    <input
-                      type="email"
-                      autoComplete="email"
-                      required
-                      value={authForm.email}
-                      onInput={(e) => setAuthForm({ ...authForm, email: (e.target as HTMLInputElement).value })}
-                      placeholder="you@example.com"
-                    />
-                  </label>
-
-                  <div className="otp-row">
-                    <button type="button" className="secondary" onClick={generateOtp}>{otpSent ? 'Resend phone OTP' : 'Send verification code to phone'}</button>
-                  </div>
-                  {otpMessage ? <p className="otp-message" role="status">{otpMessage}</p> : null}
-
-                  <label>
-                    Enter OTP
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      autoComplete="one-time-code"
-                      pattern="[0-9]{6}"
-                      maxLength={6}
-                      required
-                      value={authForm.otp}
-                      onInput={(e) => setAuthForm({ ...authForm, otp: (e.target as HTMLInputElement).value })}
-                      placeholder="123456"
-                    />
-                  </label>
-                </>
-              )}
-
-              {authError ? <p className="auth-error" role="alert">{authError}</p> : null}
-              {authNotice ? <p className="auth-notice" role="status">{authNotice}</p> : null}
-
-              <button type="submit" className="primary wide">{authMode === 'login' ? 'Login' : 'Create account'}</button>
-            </form>
-          </section>
-
-          <aside className="info-panel">
-            <h3>Welcome to Red Court</h3>
-            <img className="promo-image" src="/redcourt-promo.png" alt="Red Court Sports Center rates, opening hours, and promotions" />
-            <details className="reservation-rules">
-              <summary>Reservation rules</summary>
-              <ul>
-                <li>Courts 1-3 support Pickleball and Badminton.</li>
-                <li>Courts 4-9 are Badminton only.</li>
-                <li>Occupied time slots are disabled in this booking view.</li>
-                <li>Hourly rate: PHP 400 for Pickleball and PHP 350 for Badminton.</li>
-                <li>A 50% downpayment is due when you place a reservation.</li>
-                <li>Admin can confirm or reject bookings and refund for rejected reservations.</li>
-              </ul>
-            </details>
-          </aside>
-        </main>
+        <AuthenticationView
+          mode={authMode}
+          role={authRole}
+          registrationRole={registrationRole}
+          adminLimit={adminLimit}
+          form={authForm}
+          showPassword={showPassword}
+          otpSent={otpSent}
+          otpMessage={otpMessage}
+          error={authError}
+          notice={authNotice}
+          onRegistrationRoleChange={setRegistrationRole}
+          onFormChange={(field, value) => setAuthForm((previous) => ({ ...previous, [field]: value }))}
+          onPasswordToggle={() => setShowPassword((visible) => !visible)}
+          onGenerateOtp={() => void generateOtp()}
+          onSubmit={handleAuthSubmit}
+        />
       ) : currentUser.role === 'admin' ? (
         <main className="dashboard admin-dashboard" id="main-content">
           <section className="panel schedule-panel" id="admin-schedule">

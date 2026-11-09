@@ -4,6 +4,17 @@
 
 - Node.js 22.13.0 or newer (the server uses the built-in SQLite module).
 
+## Code organization
+
+The client code is grouped by the website's development increments:
+
+1. **Website design and navigation:** shared layout and page styling are in `src/app.tsx` and `src/app.css`; role-based navigation is in `src/features/navigation/DashboardNavigation.tsx`.
+2. **User account management:** sign-in, registration, and profile forms are in `src/features/accounts/AccountViews.tsx`; account types/profile mapping are in `src/features/accounts/account.ts`; account API workflows are coordinated in `src/app.tsx`.
+3. **Court schedule viewing:** court data, time slots, availability dates, and schedule formatting are in `src/features/courts/schedule.ts`; schedule screens are composed in `src/app.tsx`.
+4. **Court reservation management:** booking types and reservation display helpers are in `src/features/reservations/reservations.ts`; the status timeline is in `src/features/reservations/ReservationTimeline.tsx`; reservation workflows are coordinated in `src/app.tsx`.
+5. **Administrator dashboard and database:** administrator screens and API synchronization are in `src/app.tsx`; persistent database and server routes are in `server.mjs`.
+6. **Combining website features:** `src/app.tsx` connects the feature modules and selects the player, administrator, account, and sign-in views.
+
 ## Reservation data
 
 Accounts, reservations, and schedule blocks are stored in `.redcourt-data/redcourt.sqlite`.
