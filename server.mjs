@@ -677,13 +677,13 @@ const server = createServer(async (request, response) => {
       if (!isPhone(phone)) return sendJson(response, 400, { error: 'Enter a valid contact number.' })
       if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
 
-      const pending = pendingOtps.get(phone)
+      const pending = pendingOtps.get(email)
       const submittedHash = createHash('sha256').update(otp).digest('hex')
       const hashesMatch = pending && timingSafeEqual(Buffer.from(pending.hash, 'hex'), Buffer.from(submittedHash, 'hex'))
       if (!pending || pending.expiresAt <= Date.now() || !hashesMatch || !/^\d{6}$/.test(otp)) {
         if (pending) {
           pending.attempts += 1
-          if (pending.attempts >= 5) pendingOtps.delete(phone)
+          if (pending.attempts >= 5) pendingOtps.delete(email)
         }
         return sendJson(response, 400, { error: 'The OTP is invalid or expired.' })
       }
