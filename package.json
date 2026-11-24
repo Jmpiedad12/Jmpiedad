@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.119.2",
     "nodemailer": "^10.6.0",
     "preact": "^10.29.8",
     "resend": "^6.39.0"
