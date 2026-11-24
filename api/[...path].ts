@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createClient } from '@supabase/supabase-js'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { Buffer } from 'node:buffer'
 
 const PORT = Number(process.env.AUTH_PORT || 4174)
 const SESSION_DURATION = 8 * 60 * 60 * 1000
@@ -216,7 +217,7 @@ const sendJson = (response, status, body, headers = {}) => {
   response.end(JSON.stringify(body))
 }
 
-const readBody = (request) => new Promise((resolve, reject) => {
+const readBody = (request: IncomingMessage): Promise<any> => new Promise((resolve, reject) => {
   let body = ''
   request.on('data', (chunk) => {
     body += chunk
