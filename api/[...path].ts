@@ -54,14 +54,14 @@ initializeStoredValue('accounts', path.join(DATA_DIRECTORY, 'accounts.json'))
 initializeStoredValue('bookings', path.join(DATA_DIRECTORY, 'bookings.json'))
 initializeStoredValue('blocks', path.join(DATA_DIRECTORY, 'blocks.json'))
 
-const readAccounts = () => JSON.parse(readStoredValue.get('accounts').value)
-const readBlocks = () => JSON.parse(readStoredValue.get('blocks').value)
+const readAccounts = () => JSON.parse(readStoredValue.get('accounts').value as string)
+const readBlocks = () => JSON.parse(readStoredValue.get('blocks').value as string)
 const saveAccounts = (accounts) => writeStoredValue.run('accounts', JSON.stringify(accounts))
 const saveBookings = (bookings) => writeStoredValue.run('bookings', JSON.stringify(bookings))
 const saveBlocks = (blocks) => writeStoredValue.run('blocks', JSON.stringify(blocks))
 
 const readBookings = () => {
-  const bookings = JSON.parse(readStoredValue.get('bookings').value)
+  const bookings = JSON.parse(readStoredValue.get('bookings').value as string)
   const now = Date.now()
   let changed = false
   for (const booking of bookings) {
