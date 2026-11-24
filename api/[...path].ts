@@ -1,3 +1,6 @@
+/// <reference types="node" />
+/// <reference lib="es2022" />
+
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
