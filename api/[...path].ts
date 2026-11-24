@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
+import { createClient } from '@supabase/supabase-js'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -10,6 +11,9 @@ const OTP_DURATION = 10 * 60 * 1000
 const ADMIN_LIMIT = 5
 const DATA_DIRECTORY = path.join(process.cwd(), '.redcourt-data')
 const DATABASE_PATH = path.join(DATA_DIRECTORY, 'redcourt.sqlite')
+const supabaseUrl = process.env.SUPABASE_URL!
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const supabase = createClient(supabaseUrl, supabaseKey)
 const HOURLY_RATES = { Pickleball: 400, Badminton: 350 }
 const RACKET_RENTAL_PER_DAY = 100
 const SHUTTLECOCK_PRICE = 140
@@ -794,10 +798,11 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
     }
 
     return sendJson(response, 404, { error: 'Not found.' })
-  } catch (error) {
+    } catch (error) {
     const message = error instanceof Error ? error.message : 'Request failed.'
     const status = /not configured|provider could not send/i.test(message) ? 503 : 400
     return sendJson(response, status, { error: message })
   }
+}
 
 export default handler
