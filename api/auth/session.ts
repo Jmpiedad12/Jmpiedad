@@ -1,4 +1,4 @@
-import handler from '../[...path].ts'
+import handler from '../../api-handler.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export default function sessionHandler(
