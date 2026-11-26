@@ -1,27 +1,17 @@
 /// <reference types="node" />
-/// <reference lib="es2022" />
 
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { DatabaseSync } from 'node:sqlite'
-import { createClient } from '@supabase/supabase-js'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import path from 'node:path'
 import { Buffer } from 'node:buffer'
+import { getAccounts, saveAccounts, supabase } from './auth/supabase.js'
 
-const PORT = Number(process.env.AUTH_PORT || 4174)
 const SESSION_DURATION = 8 * 60 * 60 * 1000
 const OTP_DURATION = 10 * 60 * 1000
 const ADMIN_LIMIT = 5
-const DATA_DIRECTORY = path.join(process.cwd(), '.redcourt-data')
-const DATABASE_PATH = path.join(DATA_DIRECTORY, 'redcourt.sqlite')
-const supabaseUrl = process.env.SUPABASE_URL!
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const supabase = createClient(supabaseUrl, supabaseKey)
 const HOURLY_RATES = { Pickleball: 400, Badminton: 350 }
 const RACKET_RENTAL_PER_DAY = 100
 const SHUTTLECOCK_PRICE = 140
-const COURT_SPORTS = {
+const COURT_SPORTS: Record<number, string[]> = {
   1: ['Pickleball', 'Badminton'],
   2: ['Pickleball', 'Badminton'],
   3: ['Pickleball', 'Badminton'],
@@ -33,47 +23,57 @@ const COURT_SPORTS = {
   9: ['Badminton'],
 }
 const BOOKING_TIMES = new Set(Array.from({ length: 14 }, (_, index) => `${String(index + 8).padStart(2, '0')}:00`))
-const sessions = new Map()
-const pendingOtps = new Map()
-const authAttempts = new Map()
-const otpAttempts = new Map()
 
-mkdirSync(DATA_DIRECTORY, { recursive: true })
-const database = new DatabaseSync(DATABASE_PATH)
-database.exec('CREATE TABLE IF NOT EXISTS app_data (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
-const readStoredValue = database.prepare('SELECT value FROM app_data WHERE key = ?')
-const writeStoredValue = database.prepare('INSERT INTO app_data (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-const initializeStoredValue = (key, legacyFile) => {
-  if (readStoredValue.get(key)) return
-  const value = existsSync(legacyFile) ? readFileSync(legacyFile, 'utf8') : '[]'
-  JSON.parse(value)
-  writeStoredValue.run(key, value)
+type BookingSlot = { courtId: number; time: string }
+type Booking = {
+  id: string
+  user: string
+  date: string
+  slots: BookingSlot[]
+  sport: string
+  totalPrice?: number
+  deposit: number
+  racketRental: boolean
+  shuttlecockQuantity: number
+  status: string
+  createdAt: string
+  statusUpdatedAt?: string
+  statusHistory: { status: string; at: string; message: string }[]
+  refundIssued: boolean
+  [key: string]: unknown
+}
+type Account = {
+  username: string
+  role: string
+  salt?: string
+  hash?: string
+  name?: string
+  birthdate?: string
+  phone?: string
+  email?: string
+  contact?: string | null
+  [key: string]: unknown
+}
+type Session = { token: string; account: Account }
+
+const parseJson = (value: unknown) => typeof value === 'string' ? JSON.parse(value) : value
+
+const readAccounts = async (): Promise<Account[]> => {
+  const accounts = await getAccounts()
+  if (!Array.isArray(accounts)) throw new Error('The stored account data is invalid.')
+  return accounts as Account[]
 }
 
-initializeStoredValue('accounts', path.join(DATA_DIRECTORY, 'accounts.json'))
-initializeStoredValue('bookings', path.join(DATA_DIRECTORY, 'bookings.json'))
-initializeStoredValue('blocks', path.join(DATA_DIRECTORY, 'blocks.json'))
+const readBookings = async (): Promise<Booking[]> => {
+  const { data, error } = await supabase
+    .from('app_bookings')
+    .select('record')
+    .order('created_at', { ascending: false })
+  if (error) throw error
 
-const readAccounts = () => JSON.parse(readStoredValue.get('accounts').value as string)
-const readBlocks = () => JSON.parse(readStoredValue.get('blocks').value as string)
-const saveAccounts = (accounts) => writeStoredValue.run('accounts', JSON.stringify(accounts))
-const saveBookings = (bookings) => writeStoredValue.run('bookings', JSON.stringify(bookings))
-const saveBlocks = (blocks) => writeStoredValue.run('blocks', JSON.stringify(blocks))
-
-const readBookings = () => {
-  const bookings = JSON.parse(readStoredValue.get('bookings').value as string)
+  const bookings = (data || []).map((row) => parseJson(row.record) as Booking)
   const now = Date.now()
-  let changed = false
   for (const booking of bookings) {
-    if (!Array.isArray(booking.statusHistory)) {
-      booking.statusHistory = [{
-        status: booking.status,
-        at: booking.createdAt || `${booking.date}T00:00:00.000Z`,
-        message: 'Reservation status recorded',
-      }]
-      changed = true
-    }
-
     if (booking.status !== 'confirmed') continue
     const lastHour = bookingSlots(booking).reduce((latest, slot) => (
       Math.max(latest, Number(slot.time.slice(0, 2)) + 1)
@@ -81,28 +81,45 @@ const readBookings = () => {
     if (!lastHour) continue
     const endTime = Date.parse(`${booking.date}T${String(lastHour).padStart(2, '0')}:00:00+08:00`)
     if (!Number.isFinite(endTime) || endTime > now) continue
+    const expectedStatus = booking.status
     booking.status = 'completed'
     booking.statusUpdatedAt = new Date(now).toISOString()
-    booking.statusHistory.push({
+    booking.statusHistory = [...(booking.statusHistory || []), {
       status: 'completed',
       at: booking.statusUpdatedAt,
       message: 'Reservation completed after the scheduled court time.',
-    })
-    changed = true
+    }]
+    if (!await persistBooking(booking, expectedStatus)) {
+      const { data: latest, error: latestError } = await supabase
+        .from('app_bookings')
+        .select('record')
+        .eq('id', booking.id)
+        .maybeSingle()
+      if (latestError) throw latestError
+      if (latest) Object.assign(booking, parseJson(latest.record))
+    }
   }
-  if (changed) saveBookings(bookings)
   return bookings
 }
 
-const bookingSlots = (booking) => booking.slots ?? (
-  booking.courtId == null
-    ? []
-    : (booking.times ?? (booking.time ? [booking.time] : [])).map((time) => ({ courtId: booking.courtId, time }))
+const readBlocks = async () => {
+  const { data, error } = await supabase
+    .from('app_schedule_blocks')
+    .select('record')
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data || []).map((row) => parseJson(row.record))
+}
+
+const bookingSlots = (booking: Partial<Booking> & { courtId?: number; times?: string[]; time?: string }): BookingSlot[] => (
+  booking.slots ?? (
+    booking.courtId == null
+      ? []
+      : (booking.times ?? (booking.time ? [booking.time] : [])).map((time) => ({ courtId: booking.courtId as number, time }))
+  )
 )
 
-const reservationOccupiesSlot = (status) => ['pending', 'confirmed'].includes(status)
-
-const validBookingSlots = (slots, sport, allowEmpty = false) => (
+const validBookingSlots = (slots: unknown, sport: string, allowEmpty = false): slots is BookingSlot[] => (
   Array.isArray(slots) && slots.length <= 36 && (allowEmpty || slots.length > 0) &&
   slots.every((slot) => (
     Number.isInteger(slot?.courtId) && COURT_SPORTS[slot.courtId]?.includes(sport) &&
@@ -110,22 +127,13 @@ const validBookingSlots = (slots, sport, allowEmpty = false) => (
   )) && new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length
 )
 
-const hasBookingConflict = (bookings, date, slots, ignoreId = null) => bookings.some((booking) => (
-  booking.id !== ignoreId && booking.date === date && reservationOccupiesSlot(booking.status) &&
-  bookingSlots(booking).some((existingSlot) => slots.some((slot) => (
-    slot.courtId === existingSlot.courtId && slot.time === existingSlot.time
-  )))
-)) || readBlocks().some((block) => block.date === date && block.slots.some((blockedSlot) => (
-  slots.some((slot) => slot.courtId === blockedSlot.courtId && slot.time === blockedSlot.time)
-)))
-
-const validScheduleSlots = (slots) => (
+const validScheduleSlots = (slots: unknown): slots is BookingSlot[] => (
   Array.isArray(slots) && slots.length > 0 && slots.length <= 36 &&
   slots.every((slot) => Number.isInteger(slot?.courtId) && COURT_SPORTS[slot.courtId] && BOOKING_TIMES.has(slot.time)) &&
   new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length
 )
 
-const validBookingDate = (date) => (
+const validBookingDate = (date: string) => (
   /^\d{4}-\d{2}-\d{2}$/.test(date) &&
   !Number.isNaN(Date.parse(`${date}T00:00:00Z`)) &&
   new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date
@@ -138,21 +146,21 @@ const manilaToday = () => {
     month: '2-digit',
     day: '2-digit',
   }).formatToParts(new Date())
-  const part = (type) => parts.find((item) => item.type === type).value
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || ''
   return `${part('year')}-${part('month')}-${part('day')}`
 }
 
-const isFutureBooking = (date, slots) => (
+const isFutureBooking = (date: string, slots: BookingSlot[]) => (
   date >= manilaToday() &&
   slots.every((slot) => Date.parse(`${date}T${slot.time}:00+08:00`) > Date.now())
 )
 
-const hashPassword = (password, salt = randomBytes(16).toString('hex')) => ({
+const hashPassword = (password: string, salt = randomBytes(16).toString('hex')) => ({
   salt,
   hash: scryptSync(password, salt, 64).toString('hex'),
 })
 
-const publicAccount = (account) => ({
+const publicAccount = (account: Account) => ({
   username: account.username,
   role: account.role,
   name: account.name || '',
@@ -161,56 +169,55 @@ const publicAccount = (account) => ({
   email: account.email || (account.contact?.includes('@') ? account.contact : ''),
 })
 
-const bootstrapAdmin = () => {
-  const username = process.env.ADMIN_USERNAME?.trim()
-  const password = process.env.ADMIN_PASSWORD
-  if (!username && !password) return
-  if (!username || !password || password.length < 12) {
-    throw new Error('Set both ADMIN_USERNAME and ADMIN_PASSWORD (at least 12 characters).')
-  }
+const bootstrapAccounts = async () => {
+  const adminUsername = process.env.ADMIN_USERNAME?.trim()
+  const adminPassword = process.env.ADMIN_PASSWORD
+  const playerUsername = process.env.PLAYER_USERNAME?.trim()
+  const playerPassword = process.env.PLAYER_PASSWORD
+  if (!adminUsername && !adminPassword && !playerUsername && !playerPassword) return
 
-  const normalizedUsername = username.toLowerCase()
-  const accounts = readAccounts()
-  const existing = accounts.find((account) => account.username.toLowerCase() === normalizedUsername)
-  const adminCount = accounts.filter((account) => account.role === 'admin').length
-  if ((!existing || existing.role !== 'admin') && adminCount >= ADMIN_LIMIT) {
-    throw new Error(`No more than ${ADMIN_LIMIT} admin accounts are allowed.`)
+  const accounts = await readAccounts()
+  let changed = false
+  if (adminUsername || adminPassword) {
+    if (!adminUsername || !adminPassword || adminPassword.length < 12) {
+      throw new Error('Set both ADMIN_USERNAME and ADMIN_PASSWORD (at least 12 characters).')
+    }
+    const existing = accounts.find((account) => account.username.toLowerCase() === adminUsername.toLowerCase())
+    if ((!existing || existing.role !== 'admin') && accounts.filter((account) => account.role === 'admin').length >= ADMIN_LIMIT) {
+      throw new Error(`No more than ${ADMIN_LIMIT} admin accounts are allowed.`)
+    }
+    const credentials = hashPassword(adminPassword)
+    if (existing) Object.assign(existing, credentials, { username: adminUsername, role: 'admin' })
+    else accounts.push({ username: adminUsername, role: 'admin', ...credentials, contact: null })
+    changed = true
   }
-  const credentials = hashPassword(password)
-  if (existing) {
-    Object.assign(existing, credentials, { username, role: 'admin' })
-  } else {
-    accounts.push({ username, role: 'admin', ...credentials, contact: null })
+  if (playerUsername || playerPassword) {
+    if (!playerUsername || !playerPassword || playerPassword.length < 10) {
+      throw new Error('Set both PLAYER_USERNAME and PLAYER_PASSWORD (at least 10 characters).')
+    }
+    const existing = accounts.find((account) => (
+      account.username.toLowerCase() === playerUsername.toLowerCase() && account.role === 'player'
+    ))
+    const credentials = hashPassword(playerPassword)
+    if (existing) Object.assign(existing, credentials, { username: playerUsername, role: 'player' })
+    else accounts.push({ username: playerUsername, role: 'player', ...credentials, contact: null })
+    changed = true
   }
-  saveAccounts(accounts)
+  if (changed) await saveAccounts(accounts)
 }
 
-const bootstrapPlayer = () => {
-  const username = process.env.PLAYER_USERNAME?.trim()
-  const password = process.env.PLAYER_PASSWORD
-  if (!username && !password) return
-  if (!username || !password || password.length < 10) {
-    throw new Error('Set both PLAYER_USERNAME and PLAYER_PASSWORD (at least 10 characters).')
+let bootstrapPromise: Promise<void> | null = null
+const ensureBootstrapped = async () => {
+  if (!bootstrapPromise) {
+    bootstrapPromise = bootstrapAccounts().catch((error) => {
+      bootstrapPromise = null
+      throw error
+    })
   }
-
-  const normalizedUsername = username.toLowerCase()
-  const accounts = readAccounts()
-  const existing = accounts.find((account) => (
-    account.username.toLowerCase() === normalizedUsername && account.role === 'player'
-  ))
-  const credentials = hashPassword(password)
-  if (existing) {
-    Object.assign(existing, credentials, { username, role: 'player' })
-  } else {
-    accounts.push({ username, role: 'player', ...credentials, contact: null })
-  }
-  saveAccounts(accounts)
+  await bootstrapPromise
 }
 
-bootstrapAdmin()
-bootstrapPlayer()
-
-const sendJson = (response, status, body, headers = {}) => {
+const sendJson = (response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -220,41 +227,47 @@ const sendJson = (response, status, body, headers = {}) => {
   response.end(JSON.stringify(body))
 }
 
-const readBody = (request: IncomingMessage): Promise<any> => new Promise((resolve, reject) => {
+const readBody = async (request: IncomingMessage): Promise<Record<string, any>> => {
   let body = ''
-  request.on('data', (chunk) => {
-    body += chunk
-    if (body.length > 16_384) {
-      reject(new Error('Request is too large.'))
-      request.destroy()
-    }
-  })
-  request.on('end', () => {
-    try {
-      resolve(JSON.parse(body || '{}'))
-    } catch {
-      reject(new Error('Invalid request.'))
-    }
-  })
-  request.on('error', reject)
-})
-
-const requestIp = (request) => request.socket.remoteAddress || 'unknown'
-
-const allowAttempt = (store, key, maxAttempts, interval) => {
-  const now = Date.now()
-  const attempts = (store.get(key) || []).filter((time) => now - time < interval)
-  if (attempts.length >= maxAttempts) return false
-  attempts.push(now)
-  store.set(key, attempts)
-  return true
+  for await (const chunk of request) {
+    body += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
+    if (body.length > 16_384) throw Object.assign(new Error('Request is too large.'), { status: 413 })
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body || '{}')
+  } catch {
+    throw Object.assign(new Error('Invalid request.'), { status: 400 })
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw Object.assign(new Error('Invalid request.'), { status: 400 })
+  }
+  return parsed as Record<string, any>
 }
 
-const normalizeContact = (value) => value.trim().toLowerCase()
-const isEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
-const isPhone = (value) => /^\+?[\d\s()-]{7,20}$/.test(value)
+const requestIp = (request: IncomingMessage) => {
+  const forwarded = request.headers['x-forwarded-for']
+  const forwardedIp = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]
+  const realIp = request.headers['x-real-ip']
+  return (Array.isArray(realIp) ? realIp[0] : realIp) || forwardedIp?.trim() || request.socket.remoteAddress || 'unknown'
+}
 
-const deliverSms = async (contact, message) => {
+const allowAttempt = async (request: IncomingMessage, key: string, maxAttempts: number, interval: number) => {
+  const rateKey = createHash('sha256').update(`${requestIp(request)}:${key}`).digest('hex')
+  const { data, error } = await supabase.rpc('allow_app_rate_limit', {
+    p_rate_key: rateKey,
+    p_limit: maxAttempts,
+    p_window_seconds: Math.ceil(interval / 1000),
+  })
+  if (error) throw error
+  return data === true
+}
+
+const normalizeContact = (value: string) => value.trim().toLowerCase()
+const isEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+const isPhone = (value: string) => /^\+?[\d\s()-]{7,20}$/.test(value)
+
+const deliverSms = async (contact: string, message: string) => {
   const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER } = process.env
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FROM_NUMBER) {
     throw new Error('SMS delivery is not configured on the server.')
@@ -273,7 +286,7 @@ const deliverSms = async (contact, message) => {
   if (!result.ok) throw new Error('The SMS provider could not send the message.')
 }
 
-const deliverEmail = async (contact, subject, message) => {
+const deliverEmail = async (contact: string, subject: string, message: string) => {
   const { RESEND_API_KEY, RESEND_FROM } = process.env
   if (!RESEND_API_KEY || !RESEND_FROM) throw new Error('Email delivery is not configured on the server.')
   const result = await fetch('https://api.resend.com/emails', {
@@ -284,7 +297,7 @@ const deliverEmail = async (contact, subject, message) => {
   if (!result.ok) throw new Error('The email provider could not send the reservation update.')
 }
 
-const notifyBookingStatus = async (booking, account) => {
+const notifyBookingStatus = async (booking: Booking, account: Account) => {
   const approved = booking.status === 'confirmed'
   const statusText = approved ? 'approved' : 'rejected'
   const day = new Intl.DateTimeFormat('en-PH', {
@@ -295,7 +308,7 @@ const notifyBookingStatus = async (booking, account) => {
     timeZone: 'UTC',
   }).format(new Date(`${booking.date}T00:00:00Z`))
   const courtTimes = bookingSlots(booking).map((slot) => `Court ${slot.courtId} ${slot.time}`).join(', ')
-  const message = `Hi ${account.name?.trim() || account.username}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was ${statusText}.${approved ? '' : ' Your downpayment will be handled according to the refund policy.'}`
+  const message = `Hi ${String(account.name || '').trim() || account.username}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was ${statusText}.${approved ? '' : ' Your downpayment will be handled according to the refund policy.'}`
 
   if (account.email && process.env.RESEND_API_KEY && process.env.RESEND_FROM) {
     try {
@@ -314,86 +327,106 @@ const notifyBookingStatus = async (booking, account) => {
   }
 }
 
-const deliverOtp = async (contact, code) => {
-  if (isEmail(contact)) {
-    const { RESEND_API_KEY, RESEND_FROM } = process.env
-    if (!RESEND_API_KEY || !RESEND_FROM) throw new Error('Email OTP delivery is not configured on the server.')
-    const result = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: RESEND_FROM,
-        to: [contact],
-        subject: 'Your Red Court verification code',
-        text: `Your Red Court verification code is ${code}. It expires in 10 minutes.`,
-      }),
-    })
-    if (!result.ok) throw new Error('The email provider could not send the OTP.')
-    return
-  }
+const deliverOtp = (contact: string, code: string) => deliverEmail(
+  contact,
+  'Your Red Court verification code',
+  `Your Red Court verification code is ${code}. It expires in 10 minutes.`,
+)
 
-  if (isPhone(contact)) {
-    await deliverSms(contact, `Your Red Court verification code is ${code}. It expires in 10 minutes.`)
-    return
-  }
-
-  throw new Error('Enter a valid email address or phone number.')
-}
-
-const readSession = (request) => {
+const readSession = async (request: IncomingMessage): Promise<Session | null> => {
   const cookie = request.headers.cookie?.split(';').map((part) => part.trim())
     .find((part) => part.startsWith('redcourt_session='))
   const token = cookie?.slice('redcourt_session='.length)
-  const session = token ? sessions.get(token) : null
-  if (!session || session.expiresAt <= Date.now()) {
-    if (token) sessions.delete(token)
+  if (!token) return null
+
+  const { data, error } = await supabase
+    .from('app_sessions')
+    .select('username, role, expires_at')
+    .eq('token', token)
+    .maybeSingle()
+  if (error) throw error
+  if (!data || new Date(data.expires_at).getTime() <= Date.now()) {
+    if (data) {
+      const { error: deleteError } = await supabase.from('app_sessions').delete().eq('token', token)
+      if (deleteError) throw deleteError
+    }
     return null
   }
-  return {
-    token,
-    account: readAccounts().find((account) => (
-      account.username === session.username && account.role === session.role
-    )),
-  }
+
+  const account = (await readAccounts()).find((item) => item.username === data.username && item.role === data.role)
+  return account ? { token, account } : null
 }
 
-const startSession = (response, account) => {
+const startSession = async (response: ServerResponse, account: Account) => {
   const token = randomBytes(32).toString('hex')
-  sessions.set(token, { username: account.username, role: account.role, expiresAt: Date.now() + SESSION_DURATION })
+  const expiresAt = new Date(Date.now() + SESSION_DURATION)
+  const { error } = await supabase.from('app_sessions').insert({
+    token,
+    username: account.username,
+    role: account.role,
+    expires_at: expiresAt.toISOString(),
+  })
+  if (error) throw error
+
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
   response.setHeader('Set-Cookie', `redcourt_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_DURATION / 1000}${secure}`)
 }
 
-const handler = async (request: IncomingMessage, response: ServerResponse) => {
-  const url = new URL(request.url, 'http://localhost')
-  const pathname = url.pathname.replace(/\/+$/, '') || '/'
-  const route = `${request.method} ${pathname}`
+const persistBooking = async (booking: Booking, expectedStatus: string) => {
+  const { data, error } = await supabase.rpc('update_app_booking', {
+    p_record: booking,
+    p_expected_status: expectedStatus,
+  })
+  if (error) throw error
+  return data === true
+}
 
+const saveNewBooking = async (booking: Booking) => {
+  const { error } = await supabase.rpc('create_app_booking', { p_record: booking })
+  if (error) throw error
+}
+
+const isSlotConflict = (error: { code?: string; message?: string }) => (
+  error.code === '23505' || /duplicate key|unique constraint/i.test(error.message || '')
+)
+
+const errorStatus = (error: unknown) => {
+  const candidate = error as { status?: number; code?: string; message?: string }
+  if (candidate.status) return candidate.status
+  if (candidate.code === '40001') return 409
+  if (candidate.code === '23505' || /duplicate key|unique constraint/i.test(candidate.message || '')) return 409
+  if (/not configured|provider could not send/i.test(candidate.message || '')) return 503
+  return 500
+}
+
+const handler = async (request: IncomingMessage, response: ServerResponse) => {
   try {
+    await ensureBootstrapped()
+    const url = new URL(request.url || '/', 'http://localhost')
+    const rewrittenPath = url.searchParams.get('__route')
+    const pathname = (rewrittenPath ? `/api/${rewrittenPath.replace(/^\/+/, '')}` : url.pathname)
+      .replace(/\/+$/, '') || '/'
+    const route = `${request.method} ${pathname}`
+
+    if (route === 'GET /api/health') {
+      return sendJson(response, 200, { status: 'API working' })
+    }
+
     if (route === 'GET /api/blocks') {
-      const session = readSession(request)
-      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to view the court schedule.' })
-      return sendJson(response, 200, { blocks: readBlocks() })
+      const session = await readSession(request)
+      if (!session) return sendJson(response, 401, { error: 'Sign in to view the court schedule.' })
+      return sendJson(response, 200, { blocks: await readBlocks() })
     }
 
     if (route === 'POST /api/admin/blocks') {
-      const session = readSession(request)
-      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const session = await readSession(request)
+      if (session?.account.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
       const body = await readBody(request)
       const date = String(body.date || '')
-      const slots = Array.isArray(body.slots) ? body.slots : []
+      const slots = body.slots
       const reason = String(body.reason || '').trim()
       if (!validBookingDate(date) || !validScheduleSlots(slots) || reason.length < 3 || reason.length > 120) {
         return sendJson(response, 400, { error: 'Enter a valid date, at least one court time, and a reason of 3-120 characters.' })
-      }
-
-      const bookings = readBookings()
-      if (bookings.some((booking) => booking.date === date && reservationOccupiesSlot(booking.status) &&
-        bookingSlots(booking).some((existing) => slots.some((slot) => slot.courtId === existing.courtId && slot.time === existing.time)))) {
-        return sendJson(response, 409, { error: 'A selected court time already has a reservation.' })
-      }
-      if (hasBookingConflict([], date, slots)) {
-        return sendJson(response, 409, { error: 'A selected court time is already blocked.' })
       }
 
       const block = {
@@ -404,9 +437,11 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         createdAt: new Date().toISOString(),
         createdBy: session.account.username,
       }
-      const blocks = readBlocks()
-      blocks.push(block)
-      saveBlocks(blocks)
+      const { error } = await supabase.rpc('create_app_schedule_block', { p_record: block })
+      if (error) {
+        if (isSlotConflict(error)) return sendJson(response, 409, { error: 'A selected court time is already reserved or blocked.' })
+        throw error
+      }
       return sendJson(response, 201, { block })
     }
 
@@ -414,21 +449,18 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       ? pathname.match(/^\/api\/admin\/blocks\/([^/]+)$/)
       : null
     if (blockAction) {
-      const session = readSession(request)
-      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
-      const blockId = decodeURIComponent(blockAction[1])
-      const blocks = readBlocks()
-      const index = blocks.findIndex((block) => block.id === blockId)
-      if (index === -1) return sendJson(response, 404, { error: 'Schedule block not found.' })
-      blocks.splice(index, 1)
-      saveBlocks(blocks)
+      const session = await readSession(request)
+      if (session?.account.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const { data, error } = await supabase.rpc('delete_app_schedule_block', { p_id: decodeURIComponent(blockAction[1]) })
+      if (error) throw error
+      if (data !== true) return sendJson(response, 404, { error: 'Schedule block not found.' })
       return sendJson(response, 200, { ok: true })
     }
 
     if (route === 'GET /api/bookings') {
-      const session = readSession(request)
-      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to view reservations.' })
-      const bookings = readBookings()
+      const session = await readSession(request)
+      if (!session) return sendJson(response, 401, { error: 'Sign in to view reservations.' })
+      const bookings = await readBookings()
       return sendJson(response, 200, {
         bookings: session.account.role === 'admin'
           ? bookings
@@ -437,21 +469,21 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
     }
 
     if (route === 'POST /api/bookings') {
-      const session = readSession(request)
-      if (!session?.account) return sendJson(response, 401, { error: 'Your session expired. Please sign in again as a player.' })
+      const session = await readSession(request)
+      if (!session) return sendJson(response, 401, { error: 'Your session expired. Please sign in again as a player.' })
       if (session.account.role !== 'player') return sendJson(response, 403, { error: 'A player account is required to reserve court times.' })
       const account = session.account
-      if (![account.name, account.birthdate, account.phone || account.contact, account.email].every((value) => value?.trim())) {
+      if (![account.name, account.birthdate, account.phone || account.contact, account.email].every((value) => String(value || '').trim())) {
         return sendJson(response, 400, { error: 'Complete your personal information before booking a court.' })
       }
 
       const body = await readBody(request)
       const date = String(body.date || '')
       const sport = String(body.sport || '')
-      const slots = Array.isArray(body.slots) ? body.slots : []
+      const slots = body.slots
       const racketRental = body.racketRental === true
       const shuttlecockQuantity = Number(body.shuttlecockQuantity || 0)
-      const equipmentOnly = slots.length === 0 && (racketRental || shuttlecockQuantity > 0)
+      const equipmentOnly = Array.isArray(slots) && slots.length === 0 && (racketRental || shuttlecockQuantity > 0)
       if (!validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !validBookingSlots(slots, sport, true)) {
         return sendJson(response, 400, { error: 'Reservation date, sport, or time slots are invalid.' })
       }
@@ -468,15 +500,11 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         return sendJson(response, 400, { error: 'Select a court time or a badminton add-on.' })
       }
 
-      const bookings = readBookings()
-      if (hasBookingConflict(bookings, date, slots)) {
-        return sendJson(response, 409, { error: 'One or more selected court times were just reserved. Refresh availability and choose another slot.' })
-      }
-
-      const totalPrice = HOURLY_RATES[sport] * slots.length
+      const totalPrice = HOURLY_RATES[sport as keyof typeof HOURLY_RATES] * slots.length
         + (racketRental ? RACKET_RENTAL_PER_DAY : 0)
         + shuttlecockQuantity * SHUTTLECOCK_PRICE
-      const booking = {
+      const createdAt = new Date().toISOString()
+      const booking: Booking = {
         id: randomBytes(12).toString('hex'),
         user: account.username,
         date,
@@ -487,28 +515,33 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         racketRental,
         shuttlecockQuantity,
         status: 'pending',
-        createdAt: new Date().toISOString(),
-        statusUpdatedAt: new Date().toISOString(),
+        createdAt,
+        statusUpdatedAt: createdAt,
         statusHistory: [{
           status: 'pending',
-          at: new Date().toISOString(),
+          at: createdAt,
           message: 'Reservation request submitted and awaiting administrator review.',
         }],
         refundIssued: false,
       }
-      bookings.unshift(booking)
-      saveBookings(bookings)
+      try {
+        await saveNewBooking(booking)
+      } catch (error) {
+        if (isSlotConflict(error as { code?: string; message?: string })) {
+          return sendJson(response, 409, { error: 'One or more selected court times were just reserved or blocked. Refresh availability and choose another slot.' })
+        }
+        throw error
+      }
       return sendJson(response, 201, { booking })
     }
 
     if (route === 'POST /api/bookings/import-legacy') {
-      const session = readSession(request)
-      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const session = await readSession(request)
+      if (session?.account.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
       const body = await readBody(request)
       const legacyBookings = Array.isArray(body.bookings) ? body.bookings.slice(0, 1000) : []
-      const accounts = readAccounts().filter((account) => account.role === 'player')
-      const bookings = readBookings()
-      const existingIds = new Set(bookings.map((booking) => booking.id))
+      const accounts = (await readAccounts()).filter((account) => account.role === 'player')
+      const existingIds = new Set((await readBookings()).map((booking) => booking.id))
       let imported = 0
       let skippedConflicts = 0
 
@@ -524,11 +557,9 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         if (!account || !validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !status ||
           !validBookingSlots(slots, sport, true) || !Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100 ||
           (slots.length === 0 && !racketRental && shuttlecockQuantity === 0)) continue
-        if (reservationOccupiesSlot(status) && hasBookingConflict(bookings, date, slots)) {
-          skippedConflicts += 1
-          continue
-        }
-        bookings.push({
+
+        const createdAt = legacy.createdAt || new Date().toISOString()
+        const booking: Booking = {
           id: legacy.id,
           user: account.username,
           date,
@@ -539,20 +570,27 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
           racketRental,
           shuttlecockQuantity,
           status,
-          createdAt: legacy.createdAt || new Date().toISOString(),
-          statusUpdatedAt: legacy.statusUpdatedAt || new Date().toISOString(),
+          createdAt,
+          statusUpdatedAt: legacy.statusUpdatedAt || createdAt,
           statusHistory: Array.isArray(legacy.statusHistory) ? legacy.statusHistory : [{
             status,
-            at: legacy.createdAt || new Date().toISOString(),
+            at: createdAt,
             message: 'Reservation status recorded',
           }],
           refundIssued: legacy.refundIssued === true,
-        })
-        existingIds.add(legacy.id)
-        imported += 1
+        }
+        try {
+          await saveNewBooking(booking)
+          existingIds.add(booking.id)
+          imported += 1
+        } catch (error) {
+          if (isSlotConflict(error as { code?: string; message?: string })) {
+            skippedConflicts += 1
+            continue
+          }
+          throw error
+        }
       }
-
-      if (imported > 0) saveBookings(bookings)
       return sendJson(response, 200, { imported, skippedConflicts })
     }
 
@@ -560,15 +598,16 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       ? pathname.match(/^\/api\/bookings\/([^/]+)\/(confirm|reject|cancel)$/)
       : null
     if (bookingAction) {
-      const session = readSession(request)
-      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to update a reservation.' })
+      const session = await readSession(request)
+      if (!session) return sendJson(response, 401, { error: 'Sign in to update a reservation.' })
       const bookingId = decodeURIComponent(bookingAction[1])
       const action = bookingAction[2]
-      const bookings = readBookings()
-      const index = bookings.findIndex((booking) => booking.id === bookingId)
-      if (index === -1) return sendJson(response, 404, { error: 'Reservation not found.' })
-      const booking = bookings[index]
-      let notifyPlayer = false
+      const { data, error } = await supabase.from('app_bookings').select('record').eq('id', bookingId).maybeSingle()
+      if (error) throw error
+      if (!data) return sendJson(response, 404, { error: 'Reservation not found.' })
+      const booking = parseJson(data.record) as Booking
+      const expectedStatus = booking.status
+      const now = new Date().toISOString()
 
       if (action === 'cancel') {
         if (session.account.role !== 'player' || booking.user !== session.account.username) {
@@ -579,10 +618,10 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         }
         booking.status = 'cancelled'
         booking.refundIssued = false
-        booking.statusUpdatedAt = new Date().toISOString()
+        booking.statusUpdatedAt = now
         booking.statusHistory.push({
           status: 'cancelled',
-          at: booking.statusUpdatedAt,
+          at: now,
           message: 'Reservation cancelled by the player.',
         })
       } else {
@@ -595,34 +634,35 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         }
         booking.status = action === 'confirm' ? 'confirmed' : 'rejected'
         booking.refundIssued = action === 'reject'
-        booking.statusUpdatedAt = new Date().toISOString()
+        booking.statusUpdatedAt = now
         booking.statusHistory.push({
           status: booking.status,
-          at: booking.statusUpdatedAt,
+          at: now,
           message: action === 'confirm'
             ? 'Reservation approved by the administrator.'
             : 'Reservation rejected by the administrator.',
         })
-        notifyPlayer = true
       }
 
-      saveBookings(bookings)
-      if (notifyPlayer) {
-        const account = readAccounts().find((item) => item.username.toLowerCase() === booking.user.toLowerCase())
+      if (!await persistBooking(booking, expectedStatus)) {
+        return sendJson(response, 409, { error: 'This reservation changed while you were updating it. Refresh and try again.' })
+      }
+      if (action !== 'cancel') {
+        const account = (await readAccounts()).find((item) => item.username.toLowerCase() === booking.user.toLowerCase())
         if (account) await notifyBookingStatus(booking, account)
       }
       return sendJson(response, 200, { booking })
     }
 
     if (route === 'GET /api/auth/session') {
-      const session = readSession(request)
-      if (!session?.account) return sendJson(response, 401, { error: 'Not signed in.' })
+      const session = await readSession(request)
+      if (!session) return sendJson(response, 401, { error: 'Not signed in.' })
       return sendJson(response, 200, { user: publicAccount(session.account) })
     }
 
     if (route === 'PUT /api/account/profile') {
-      const session = readSession(request)
-      if (!session?.account) return sendJson(response, 401, { error: 'Sign in to manage your account.' })
+      const session = await readSession(request)
+      if (!session) return sendJson(response, 401, { error: 'Sign in to manage your account.' })
 
       const body = await readBody(request)
       const name = String(body.name || '').trim()
@@ -639,7 +679,7 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       if (!isPhone(phone)) return sendJson(response, 400, { error: 'Enter a valid contact number.' })
       if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
 
-      const accounts = readAccounts()
+      const accounts = await readAccounts()
       const accountIndex = accounts.findIndex((account) => (
         account.username === session.account.username && account.role === session.account.role
       ))
@@ -650,21 +690,34 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       if (duplicateContact) return sendJson(response, 409, { error: 'That phone number or email is already in use.' })
 
       Object.assign(accounts[accountIndex], { name, birthdate, phone, email })
-      saveAccounts(accounts)
+      await saveAccounts(accounts)
       return sendJson(response, 200, { user: publicAccount(accounts[accountIndex]) })
     }
 
     if (route === 'POST /api/auth/otp') {
       const body = await readBody(request)
       const contact = normalizeContact(String(body.contact || ''))
-      const rateKey = `${requestIp(request)}:${contact}`
-      if (!allowAttempt(otpAttempts, rateKey, 3, 60 * 60 * 1000)) {
+      if (!isEmail(contact)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
+      if (!await allowAttempt(request, contact, 3, 60 * 60 * 1000)) {
         return sendJson(response, 429, { error: 'Too many OTP requests. Try again later.' })
       }
+
       const code = String(randomInt(100000, 1000000))
-      await deliverOtp(contact, code)
-      pendingOtps.set(contact, { hash: createHash('sha256').update(code).digest('hex'), expiresAt: Date.now() + OTP_DURATION, attempts: 0 })
-      return sendJson(response, 200, { message: 'OTP sent. It expires in 10 minutes.' })
+      const { error } = await supabase.from('app_otps').upsert({
+        contact,
+        code_hash: createHash('sha256').update(code).digest('hex'),
+        expires_at: new Date(Date.now() + OTP_DURATION).toISOString(),
+        attempts: 0,
+      }, { onConflict: 'contact' })
+      if (error) throw error
+      try {
+        await deliverOtp(contact, code)
+      } catch (error) {
+        const { error: deleteError } = await supabase.from('app_otps').delete().eq('contact', contact)
+        if (deleteError) console.error('Could not remove undelivered verification code:', deleteError)
+        throw error
+      }
+      return sendJson(response, 200, { message: 'OTP sent to your email address. It expires in 10 minutes.' })
     }
 
     if (route === 'POST /api/auth/register') {
@@ -685,18 +738,17 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       if (!isPhone(phone)) return sendJson(response, 400, { error: 'Enter a valid contact number.' })
       if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
 
-      const pending = pendingOtps.get(email)
       const submittedHash = createHash('sha256').update(otp).digest('hex')
-      const hashesMatch = pending && timingSafeEqual(Buffer.from(pending.hash, 'hex'), Buffer.from(submittedHash, 'hex'))
-      if (!pending || pending.expiresAt <= Date.now() || !hashesMatch || !/^\d{6}$/.test(otp)) {
-        if (pending) {
-          pending.attempts += 1
-          if (pending.attempts >= 5) pendingOtps.delete(email)
-        }
+      const { data: otpValid, error: otpError } = await supabase.rpc('consume_app_otp', {
+        p_contact: email,
+        p_code_hash: submittedHash,
+      })
+      if (otpError) throw otpError
+      if (otpValid !== true || !/^\d{6}$/.test(otp)) {
         return sendJson(response, 400, { error: 'The OTP is invalid or expired.' })
       }
 
-      const accounts = readAccounts()
+      const accounts = await readAccounts()
       if (accounts.some((account) => account.username.toLowerCase() === username.toLowerCase())) {
         return sendJson(response, 409, { error: 'That username is already in use.' })
       }
@@ -712,14 +764,13 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       }
 
       const credentials = hashPassword(password)
-      const account = { username, role, name, phone, email, contact: phone, ...credentials }
+      const account: Account = { username, role, name, phone, email, contact: phone, ...credentials }
       accounts.push(account)
-      saveAccounts(accounts)
-      pendingOtps.delete(phone)
+      await saveAccounts(accounts)
       if (role === 'admin-pending') {
         return sendJson(response, 202, { pendingApproval: true, message: 'Your admin account request was sent for approval.' })
       }
-      startSession(response, account)
+      await startSession(response, account)
       return sendJson(response, 201, { user: publicAccount(account) })
     }
 
@@ -728,30 +779,32 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       const username = String(body.username || '').trim()
       const password = String(body.password || '')
       const requestedRole = body.role === 'admin' ? 'admin' : 'player'
-      const ip = requestIp(request)
-      if (!allowAttempt(authAttempts, ip, 10, 15 * 60 * 1000)) {
+      if (!await allowAttempt(request, 'login', 10, 15 * 60 * 1000)) {
         return sendJson(response, 429, { error: 'Too many login attempts. Try again later.' })
       }
 
-      const account = readAccounts().find((item) => (
+      const account = (await readAccounts()).find((item) => (
         item.username.toLowerCase() === username.toLowerCase() && item.role === requestedRole
       ))
-      const credentials = account || { salt: '00'.repeat(16), hash: scryptSync('invalid-password', '00'.repeat(16), 64).toString('hex') }
-      const candidate = scryptSync(password, credentials.salt, 64)
-      const expected = Buffer.from(credentials.hash, 'hex')
+      const credentials = account || {
+        salt: '00'.repeat(16),
+        hash: scryptSync('invalid-password', '00'.repeat(16), 64).toString('hex'),
+      }
+      const candidate = scryptSync(password, credentials.salt || '', 64)
+      const expected = Buffer.from(credentials.hash || '', 'hex')
       const passwordMatches = candidate.length === expected.length && timingSafeEqual(candidate, expected)
-      if (!account || !passwordMatches || account.role !== requestedRole) {
+      if (!account || !passwordMatches) {
         return sendJson(response, 401, { error: 'Username, password or account type is incorrect.' })
       }
 
-      startSession(response, account)
+      await startSession(response, account)
       return sendJson(response, 200, { user: publicAccount(account) })
     }
 
     if (route === 'GET /api/admin/requests') {
-      const session = readSession(request)
-      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
-      const accounts = readAccounts()
+      const session = await readSession(request)
+      if (session?.account.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const accounts = await readAccounts()
       return sendJson(response, 200, {
         requests: accounts
           .filter((account) => account.role === 'admin-pending')
@@ -765,17 +818,16 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       ? pathname.match(/^\/api\/admin\/requests\/([^/]+)\/(approve|reject)$/)
       : null
     if (adminRequestAction) {
-      const session = readSession(request)
-      if (session?.account?.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
+      const session = await readSession(request)
+      if (session?.account.role !== 'admin') return sendJson(response, 403, { error: 'Admin access required.' })
 
       const username = decodeURIComponent(adminRequestAction[1])
       const action = adminRequestAction[2]
-      const accounts = readAccounts()
+      const accounts = await readAccounts()
       const requestIndex = accounts.findIndex((account) => (
         account.role === 'admin-pending' && account.username.toLowerCase() === username.toLowerCase()
       ))
       if (requestIndex === -1) return sendJson(response, 404, { error: 'Admin request not found.' })
-
       if (action === 'approve') {
         const activeAdminCount = accounts.filter((account) => account.role === 'admin').length
         if (activeAdminCount >= ADMIN_LIMIT) {
@@ -786,7 +838,7 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         accounts.splice(requestIndex, 1)
       }
 
-      saveAccounts(accounts)
+      await saveAccounts(accounts)
       return sendJson(response, 200, {
         ok: true,
         activeAdminCount: accounts.filter((account) => account.role === 'admin').length,
@@ -794,19 +846,26 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
     }
 
     if (route === 'POST /api/auth/logout') {
-      const session = readSession(request)
-      if (session) sessions.delete(session.token)
+      const session = await readSession(request)
+      if (session) {
+        const { error } = await supabase.from('app_sessions').delete().eq('token', session.token)
+        if (error) throw error
+      }
       return sendJson(response, 200, { ok: true }, {
         'Set-Cookie': 'redcourt_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0',
       })
     }
 
     return sendJson(response, 404, { error: 'Not found.' })
-    } catch (error) {
+  } catch (error) {
+    const status = errorStatus(error)
+    if (status >= 500) console.error('API request failed:', error)
     const message = error instanceof Error ? error.message : 'Request failed.'
-    const status = /not configured|provider could not send/i.test(message) ? 503 : 400
-    return sendJson(response, status, { error: message })
+    return sendJson(response, status, {
+      error: status === 500 ? 'The server could not complete the request.' : message,
+    })
   }
 }
 
+export { handler }
 export default handler

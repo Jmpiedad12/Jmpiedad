@@ -246,10 +246,12 @@ export function App() {
     setOtpSent(false)
     setOtpMessage('Sending OTP...')
     try {
+      const email = authForm.email.trim().toLowerCase()
+      if (!email) throw new Error('Enter your email address before requesting a verification code.')
       const response = await fetch('/api/auth/otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact: authForm.email }),
+        body: JSON.stringify({ contact: email }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Could not send OTP.')
@@ -287,7 +289,7 @@ export function App() {
     }
 
     if (authMode === 'signup' && (!authForm.name.trim() || !authForm.phone.trim() || !authForm.email.trim() || !authForm.otp.trim())) {
-      setAuthError('Enter your name, contact number, email, and the OTP sent to your contact number.')
+      setAuthError('Enter your name, contact number, email, and the OTP sent to your email address.')
       return
     }
 
@@ -420,7 +422,7 @@ export function App() {
     handleBookingReview()
   }, [resumeBookingReview, currentUser])
 
-  const confirmDeposit = async () => {
+  const submitReservation = async () => {
     if (!draftReservation || !currentUser) return
 
     try {
@@ -459,7 +461,7 @@ export function App() {
       setRacketRental(false)
       setShuttlecockQuantity(0)
       setDraftReservation(null)
-      window.alert('Your 50% downpayment was recorded. Your reservation is pending admin approval.')
+      window.alert('Your reservation request was submitted. The 50% downpayment is due, and your reservation is pending admin approval.')
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Could not complete the reservation.')
     }
@@ -633,7 +635,17 @@ export function App() {
           error={authError}
           notice={authNotice}
           onRegistrationRoleChange={setRegistrationRole}
-          onFormChange={(field, value) => setAuthForm((previous) => ({ ...previous, [field]: value }))}
+          onFormChange={(field, value) => {
+            setAuthForm((previous) => ({
+              ...previous,
+              [field]: value,
+              ...(field === 'email' ? { otp: '' } : {}),
+            }))
+            if (field === 'email') {
+              setOtpSent(false)
+              setOtpMessage('')
+            }
+          }}
           onPasswordToggle={() => setShowPassword((visible) => !visible)}
           onGenerateOtp={() => void generateOtp()}
           onSubmit={handleAuthSubmit}
@@ -1040,7 +1052,8 @@ export function App() {
           {draftReservation && (
             <div className="payment-overlay" onClick={() => setDraftReservation(null)}>
               <aside className="payment-panel panel" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title" onClick={(e) => e.stopPropagation()}>
-              <h2 id="payment-dialog-title">Payment review</h2>
+              <h2 id="payment-dialog-title">Reservation review</h2>
+              <p className="muted">Submitting creates a reservation request; payment is handled separately.</p>
               {draftReservation.slots.length > 0
                 ? <p>Hourly rate: PHP {HOURLY_RATES[draftReservation.sport as keyof typeof HOURLY_RATES]} per hour.</p>
                 : <p>Equipment-only order; no court booking included.</p>}
@@ -1071,12 +1084,12 @@ export function App() {
                 ) : null}
                 <span>Total price</span>
                 <strong>PHP {draftReservation.totalPrice.toFixed(2)}</strong>
-                <span>50% downpayment due now</span>
+                <span>50% downpayment amount</span>
                 <strong>PHP {draftReservation.deposit.toFixed(2)}</strong>
               </div>
 
               <div className="payment-buttons">
-                <button className="primary" onClick={confirmDeposit}>Pay 50% downpayment</button>
+                <button className="primary" onClick={submitReservation}>Submit reservation request</button>
                 <button className="secondary" onClick={() => setDraftReservation(null)}>Cancel</button>
               </div>
               </aside>

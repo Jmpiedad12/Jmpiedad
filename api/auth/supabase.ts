@@ -14,11 +14,21 @@ export const getAccounts = async () => {
     .from('app_data')
     .select('value')
     .eq('key', 'accounts')
-    .single()
+    .maybeSingle()
 
   if (error) throw error
+
+  if (!data) return []
 
   return typeof data.value === 'string'
     ? JSON.parse(data.value)
     : data.value
+}
+
+export const saveAccounts = async (accounts: unknown) => {
+  const { error } = await supabase
+    .from('app_data')
+    .upsert({ key: 'accounts', value: JSON.stringify(accounts) }, { onConflict: 'key' })
+
+  if (error) throw error
 }

@@ -12,14 +12,23 @@ The client code is grouped by the website's development increments:
 2. **User account management:** sign-in, registration, and profile forms are in `src/features/accounts/AccountViews.tsx`; account types/profile mapping are in `src/features/accounts/account.ts`; account API workflows are coordinated in `src/app.tsx`.
 3. **Court schedule viewing:** court data, time slots, availability dates, and schedule formatting are in `src/features/courts/schedule.ts`; schedule screens are composed in `src/app.tsx`.
 4. **Court reservation management:** booking types and reservation display helpers are in `src/features/reservations/reservations.ts`; the status timeline is in `src/features/reservations/ReservationTimeline.tsx`; reservation workflows are coordinated in `src/app.tsx`.
-5. **Administrator dashboard and database:** administrator screens and API synchronization are in `src/app.tsx`; persistent database and server routes are in `server.mjs`.
+5. **Administrator dashboard and database:** administrator screens and API synchronization are in `src/app.tsx`; local persistent storage and server routes are in `server.ts`.
 6. **Combining website features:** `src/app.tsx` connects the feature modules and selects the player, administrator, account, and sign-in views.
 
-## Reservation data
+## Data storage and deployment
 
-Accounts, reservations, and schedule blocks are stored in `.redcourt-data/redcourt.sqlite`.
-On first startup, existing `accounts.json`, `bookings.json`, and `blocks.json` files in
-that directory are imported into the database and kept as migration backups.
+Local development stores accounts, reservations, and schedule blocks in
+`.redcourt-data/redcourt.sqlite`. On first startup, existing `accounts.json`,
+`bookings.json`, and `blocks.json` files in that directory are imported and kept as
+migration backups.
+
+Vercel API requests use Supabase. Accounts remain in the existing `app_data` table;
+reservations, reserved court slots, schedule blocks, OTPs, rate limits, and sessions use
+the tables and RPC functions defined in
+`supabase/migrations/20261126000000_serverless_reservations.sql`. Apply that migration
+to the Supabase project before deploying. Configure `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY` in Vercel's server-side environment variables; never expose
+the service-role key to the browser.
 
 ## Run locally
 
@@ -28,18 +37,19 @@ npm install
 npm run dev
 ```
 
-Email and SMS status notifications are sent when the corresponding Resend or Twilio
-environment variables are configured. Reservation status updates are also saved to each
-booking and shown in the player reservation timeline.
+Email OTPs and reservation email/SMS notifications require the corresponding Resend or
+Twilio environment variables. OTP codes expire after ten minutes and are consumed once.
+Reservation status updates are saved to each booking and shown in the player reservation
+timeline. Vercel routes `/api/*` requests through the Supabase-backed API function.
 
 ## Access, security, and operations
 
 The interface adapts to phone, tablet, and desktop widths and supports keyboard navigation.
 Player and administrator actions are checked by the server; passwords are stored as scrypt
 hashes, and session cookies are HttpOnly and SameSite. In production, serve the site through
-HTTPS so the server also marks session cookies Secure.
+HTTPS so session cookies are marked Secure. The Supabase reservation-slot index and
+transactional RPC prevent concurrent requests from reserving the same court time.
 
-Reservation, account, and schedule data persist in SQLite. Sessions, OTPs, and authentication
-rate limits are held in memory, so a server restart requires users to sign in again and clears
-pending verification codes and rate-limit counters. Back up `.redcourt-data` securely and keep
-it outside public web access.
+Local development keeps sessions, OTPs, and rate limits in memory, so a local server restart
+requires users to sign in again and clears pending verification codes and rate-limit counters.
+Back up `.redcourt-data` securely and keep it outside public web access.

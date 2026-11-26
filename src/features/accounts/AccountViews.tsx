@@ -202,7 +202,7 @@ export function AuthenticationView({
               </label>
 
               <div className="otp-row">
-                <button type="button" className="secondary" onClick={onGenerateOtp}>{otpSent ? 'Resend phone OTP' : 'Send verification code to phone'}</button>
+                <button type="button" className="secondary" onClick={onGenerateOtp}>{otpSent ? 'Resend email OTP' : 'Send verification code to email'}</button>
               </div>
               {otpMessage ? <p className="otp-message" role="status">{otpMessage}</p> : null}
 
@@ -240,7 +240,7 @@ export function AuthenticationView({
             <li>Courts 4-9 are Badminton only.</li>
             <li>Occupied time slots are disabled in this booking view.</li>
             <li>Hourly rate: PHP {HOURLY_RATES.Pickleball} for Pickleball and PHP {HOURLY_RATES.Badminton} for Badminton.</li>
-            <li>A 50% downpayment is due when you place a reservation.</li>
+            <li>A 50% downpayment is due for reservations. Payment is handled separately; the site does not process payments.</li>
             <li>Admin can confirm or reject bookings and refund for rejected reservations.</li>
           </ul>
         </details>

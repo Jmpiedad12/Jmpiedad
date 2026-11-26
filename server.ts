@@ -649,6 +649,7 @@ const server = createServer(async (request, response) => {
     if (route === 'POST /api/auth/otp') {
       const body = await readBody(request)
       const contact = normalizeContact(String(body.contact || ''))
+      if (!isEmail(contact)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
       const rateKey = `${requestIp(request)}:${contact}`
       if (!allowAttempt(otpAttempts, rateKey, 3, 60 * 60 * 1000)) {
         return sendJson(response, 429, { error: 'Too many OTP requests. Try again later.' })
@@ -707,7 +708,7 @@ const server = createServer(async (request, response) => {
       const account = { username, role, name, phone, email, contact: phone, ...credentials }
       accounts.push(account)
       saveAccounts(accounts)
-      pendingOtps.delete(phone)
+      pendingOtps.delete(email)
       if (role === 'admin-pending') {
         return sendJson(response, 202, { pendingApproval: true, message: 'Your admin account request was sent for approval.' })
       }

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export default function handler(
-  request: IncomingMessage,
+  _request: IncomingMessage,
   response: ServerResponse
 ) {
   response.statusCode = 200

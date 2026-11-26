@@ -7,7 +7,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "concurrently -k \"node --env-file-if-exists=.env server.mjs\" \"vite --host 0.0.0.0\"",
+    "dev": "concurrently -k \"node --experimental-strip-types --env-file-if-exists=.env server.ts\" \"vite --host 0.0.0.0\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
