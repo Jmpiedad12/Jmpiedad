@@ -74,6 +74,7 @@ type AuthenticationViewProps = {
   registrationRole: AccountRole
   adminLimit: number
   form: AuthForm
+  isSubmitting: boolean
   showPassword: boolean
   otpSent: boolean
   otpMessage: string
@@ -92,6 +93,7 @@ export function AuthenticationView({
   registrationRole,
   adminLimit,
   form,
+  isSubmitting,
   showPassword,
   otpSent,
   otpMessage,
@@ -228,7 +230,9 @@ export function AuthenticationView({
           {error ? <p className="auth-error" role="alert">{error}</p> : null}
           {notice ? <p className="auth-notice" role="status">{notice}</p> : null}
 
-          <button type="submit" className="primary wide">{mode === 'login' ? 'Login' : 'Create account'}</button>
+          <button type="submit" className="primary wide" disabled={isSubmitting}>
+            {isSubmitting ? (mode === 'login' ? 'Signing in...' : 'Signing up...') : mode === 'login' ? 'Login' : 'Create account'}
+          </button>
         </form>
       </section>
 

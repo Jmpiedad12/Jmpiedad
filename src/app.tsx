@@ -3,7 +3,6 @@ import './app.css'
 import {
   addDays,
   COURTS,
-  formatClockTime,
   formatDate,
   formatTimeRange,
   HOURS,
@@ -41,6 +40,7 @@ export function App() {
   const [authRole, setAuthRole] = useState<'player' | 'admin'>('player')
   const [registrationRole, setRegistrationRole] = useState<'player' | 'admin'>('player')
   const [authForm, setAuthForm] = useState(defaultAuth)
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [otpSent, setOtpSent] = useState(false)
   const [otpMessage, setOtpMessage] = useState('')
@@ -67,10 +67,6 @@ export function App() {
   })
   const [selectedDate, setSelectedDate] = useState(addDays(0))
   const [selectedSport, setSelectedSport] = useState('Pickleball')
-  const [rangeCourtId, setRangeCourtId] = useState(1)
-  const [rangeStart, setRangeStart] = useState('18:00')
-  const [rangeEnd, setRangeEnd] = useState('19:00')
-  const [rangeError, setRangeError] = useState('')
   const [preferredTime, setPreferredTime] = useState('18:00')
   const [selectedSlots, setSelectedSlots] = useState<BookingSlot[]>([])
   const [racketRental, setRacketRental] = useState(false)
@@ -208,12 +204,6 @@ export function App() {
   const isSlotBlocked = (courtId: number, time: string) => scheduleBlocks.some((block) => (
     block.date === selectedDate && block.slots.some((slot) => slot.courtId === courtId && slot.time === time)
   ))
-  const rangeStartOptions = HOURS.filter((time) => slotIsInFuture(selectedDate, time))
-  const effectiveRangeStart = rangeStartOptions.includes(rangeStart) ? rangeStart : rangeStartOptions[0] || ''
-  const rangeEndOptions = effectiveRangeStart
-    ? HOURS.slice(HOURS.indexOf(effectiveRangeStart) + 1).concat('22:00')
-    : []
-  const effectiveRangeEnd = rangeEndOptions.includes(rangeEnd) ? rangeEnd : rangeEndOptions[0] || ''
   const preferredTimeOptions = HOURS.filter((time) => slotIsInFuture(selectedDate, time))
   const effectivePreferredTime = preferredTimeOptions.includes(preferredTime) ? preferredTime : preferredTimeOptions[0] || ''
   const preferredTimeCourts = availableCourts.filter((court) => (
@@ -221,25 +211,6 @@ export function App() {
     !isSlotTaken(court.id, selectedDate, effectivePreferredTime) &&
     !isSlotBlocked(court.id, effectivePreferredTime)
   ))
-
-  const addTimeRange = () => {
-    setRangeError('')
-    const startIndex = HOURS.indexOf(effectiveRangeStart)
-    const endIndex = effectiveRangeEnd === '22:00' ? HOURS.length : HOURS.indexOf(effectiveRangeEnd)
-    if (startIndex < 0 || endIndex <= startIndex) {
-      setRangeError('Choose an end time after the start time.')
-      return
-    }
-    const slots = HOURS.slice(startIndex, endIndex).map((time) => ({ courtId: rangeCourtId, time }))
-    if (slots.some((slot) => !slotIsInFuture(selectedDate, slot.time) || isSlotTaken(slot.courtId, selectedDate, slot.time) || isSlotBlocked(slot.courtId, slot.time))) {
-      setRangeError('That time range includes a past, reserved, or blocked slot. Choose another range.')
-      return
-    }
-    setSelectedSlots((previous) => [
-      ...previous,
-      ...slots.filter((slot) => !previous.some((selected) => selected.courtId === slot.courtId && selected.time === slot.time)),
-    ])
-  }
 
   // Increment 2: user account, registration, and profile workflows.
   const generateOtp = async () => {
@@ -283,6 +254,7 @@ export function App() {
 
   const handleAuthSubmit = async (event: Event) => {
     event.preventDefault()
+    if (isAuthSubmitting) return
 
     if (!authForm.username.trim() || !authForm.password.trim()) {
       window.alert('Please enter your username and password.')
@@ -296,6 +268,7 @@ export function App() {
 
     setAuthError('')
     setAuthNotice('')
+    setIsAuthSubmitting(true)
     try {
       const endpoint = authMode === 'signup' ? 'register' : 'login'
       const response = await fetch(`/api/auth/${endpoint}`, {
@@ -331,6 +304,8 @@ export function App() {
       setOtpMessage('')
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Authentication failed.')
+    } finally {
+      setIsAuthSubmitting(false)
     }
   }
 
@@ -596,10 +571,14 @@ export function App() {
               <button className="secondary" onClick={handleLogout}>Logout</button>
             </>
           ) : (
-            <>
-              <button className={authMode === 'login' ? 'primary' : 'secondary'} onClick={toggleAuthRole}>{authRole === 'player' ? 'Admin Log In' : 'Player Log In'}</button>
-              <button className={authMode === 'signup' ? 'primary' : 'secondary'} onClick={() => changeAuthMode('signup')}>Create Account</button>
-            </>
+            authMode === 'signup' ? (
+              <button className="secondary" disabled={isAuthSubmitting} onClick={() => changeAuthMode('login')}>Back to Sign In</button>
+            ) : (
+              <>
+                <button className="primary" onClick={toggleAuthRole}>{authRole === 'player' ? 'Admin Log In' : 'Player Log In'}</button>
+                <button className="secondary" onClick={() => changeAuthMode('signup')}>Create Account</button>
+              </>
+            )
           )}
         </div>
       </header>
@@ -634,6 +613,7 @@ export function App() {
           registrationRole={registrationRole}
           adminLimit={adminLimit}
           form={authForm}
+          isSubmitting={isAuthSubmitting}
           showPassword={showPassword}
           otpSent={otpSent}
           otpMessage={otpMessage}
@@ -832,7 +812,6 @@ export function App() {
               <select value={selectedSport} onChange={(e) => {
                 const sport = (e.target as HTMLSelectElement).value
                 setSelectedSport(sport)
-                setRangeCourtId(1)
                 setSelectedSlots([])
                 if (sport !== 'Badminton') {
                   setRacketRental(false)
@@ -852,40 +831,6 @@ export function App() {
                 setSelectedSlots([])
               }} />
             </label>
-
-            <section className="range-booking-tools" aria-label="Choose reservation start and end time">
-              <h3>Choose a time range</h3>
-              <div className="range-booking-fields">
-                <label>
-                  Court
-                  <select value={rangeCourtId} onChange={(event) => setRangeCourtId(Number((event.target as HTMLSelectElement).value))}>
-                    {availableCourts.map((court) => <option value={court.id} key={court.id}>{court.name}</option>)}
-                  </select>
-                </label>
-                <label>
-                  Start time
-                  <select value={effectiveRangeStart} onChange={(event) => {
-                    const start = (event.target as HTMLSelectElement).value
-                    setRangeStart(start)
-                    if (effectiveRangeEnd <= start) setRangeEnd(HOURS[HOURS.indexOf(start) + 1] || '22:00')
-                  }}>
-                    {rangeStartOptions.length > 0
-                      ? rangeStartOptions.map((time) => <option value={time} key={time}>{formatClockTime(time)}</option>)
-                      : <option value="">No future times available</option>}
-                  </select>
-                </label>
-                <label>
-                  End time
-                  <select value={effectiveRangeEnd} onChange={(event) => setRangeEnd((event.target as HTMLSelectElement).value)}>
-                    {rangeEndOptions.length > 0 ? rangeEndOptions.map((time) => (
-                      <option value={time} key={time}>{formatClockTime(time)}</option>
-                    )) : <option value="">No future times available</option>}
-                  </select>
-                </label>
-              </div>
-              {rangeError ? <p className="auth-error" role="alert">{rangeError}</p> : null}
-              <button type="button" className="secondary" disabled={!effectiveRangeStart || !effectiveRangeEnd} onClick={addTimeRange}>Add time range</button>
-            </section>
 
             {bookingSyncNotice ? <p className="auth-error" role="status">{bookingSyncNotice}</p> : null}
 

@@ -431,35 +431,6 @@ select {
   margin-top: 1rem;
 }
 
-.range-booking-tools {
-  display: grid;
-  gap: 0.75rem;
-  margin: 0 0 1.25rem;
-  padding: 1rem;
-  border: 1px solid #e5e5e5;
-  border-left: 3px solid #dc2626;
-  border-radius: 12px;
-  background: #fafafa;
-}
-
-.range-booking-tools h3,
-.range-booking-tools p {
-  margin: 0;
-}
-
-.range-booking-fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.range-booking-fields label {
-  display: grid;
-  gap: 0.4rem;
-  color: #404040;
-  font-weight: 600;
-}
-
 .preferred-court-list {
   display: flex;
   flex-wrap: wrap;
@@ -849,9 +820,6 @@ select {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .range-booking-fields {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 760px) {
