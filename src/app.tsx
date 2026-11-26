@@ -69,7 +69,7 @@ export function App() {
   const [selectedSport, setSelectedSport] = useState('Pickleball')
   const [preferredTime, setPreferredTime] = useState('18:00')
   const [selectedSlots, setSelectedSlots] = useState<BookingSlot[]>([])
-  const [racketRental, setRacketRental] = useState(false)
+  const [racketRentalQuantity, setRacketRentalQuantity] = useState(0)
   const [shuttlecockQuantity, setShuttlecockQuantity] = useState(0)
   const [draftReservation, setDraftReservation] = useState<null | {
     slots: BookingSlot[]
@@ -77,7 +77,7 @@ export function App() {
     sport: string
     deposit: number
     totalPrice: number
-    racketRental: boolean
+    racketRentalQuantity: number
     shuttlecockQuantity: number
   }>(null)
 
@@ -187,10 +187,11 @@ export function App() {
   }, [bookings])
 
   const hourlyRate = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES]
-  const racketRentalTotal = selectedSport === 'Badminton' && racketRental ? RACKET_RENTAL_PER_DAY : 0
+  const racketRentalTotal = selectedSport === 'Badminton' ? racketRentalQuantity * RACKET_RENTAL_PER_DAY : 0
   const shuttlecockTotal = selectedSport === 'Badminton' ? shuttlecockQuantity * SHUTTLECOCK_PRICE : 0
   const totalPayment = hourlyRate * selectedSlots.length + racketRentalTotal + shuttlecockTotal
-  const canReviewOrder = selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRental || shuttlecockQuantity > 0))
+  const amountDueNow = hourlyRate * selectedSlots.length / 2 + racketRentalTotal + shuttlecockTotal
+  const canReviewOrder = selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRentalQuantity > 0 || shuttlecockQuantity > 0))
 
   const slotReservation = (courtId: number, date: string, time: string) =>
     bookings.find((booking) => (
@@ -290,11 +291,17 @@ export function App() {
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Authentication failed.')
-      if (result.pendingApproval) {
-        setAuthForm(defaultAuth)
+      if (authMode === 'signup') {
+        setAuthMode('login')
+        setAuthRole(result.pendingApproval ? 'admin' : 'player')
+        setRegistrationRole('player')
+        setAuthForm({ ...defaultAuth, username: authForm.username.trim() })
+        setShowPassword(false)
         setOtpSent(false)
         setOtpMessage('')
-        setAuthNotice(result.message)
+        setAuthNotice(result.pendingApproval
+          ? result.message
+          : 'Your account was created. Please sign in.')
         return
       }
       setCurrentUser(result.user)
@@ -317,7 +324,7 @@ export function App() {
     setResumeBookingReview(false)
     setDraftReservation(null)
     setSelectedSlots([])
-    setRacketRental(false)
+    setRacketRentalQuantity(0)
     setShuttlecockQuantity(0)
     setProfileError('')
     setProfileMessage('')
@@ -359,9 +366,9 @@ export function App() {
     const slots = [...selectedSlots].sort((left, right) => (
       left.courtId - right.courtId || HOURS.indexOf(left.time) - HOURS.indexOf(right.time)
     ))
-    const bookingRacketRental = selectedSport === 'Badminton' && racketRental
+    const bookingRacketRentalQuantity = selectedSport === 'Badminton' ? racketRentalQuantity : 0
     const bookingShuttlecockQuantity = selectedSport === 'Badminton' ? shuttlecockQuantity : 0
-    const equipmentOnly = slots.length === 0 && (bookingRacketRental || bookingShuttlecockQuantity > 0)
+    const equipmentOnly = slots.length === 0 && (bookingRacketRentalQuantity > 0 || bookingShuttlecockQuantity > 0)
 
     if (slots.length === 0 && !equipmentOnly) {
       window.alert('Select an available time or a badminton add-on.')
@@ -372,10 +379,11 @@ export function App() {
       return
     }
 
-    const totalPrice = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES] * slots.length
-      + (bookingRacketRental ? RACKET_RENTAL_PER_DAY : 0)
+    const courtTotal = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES] * slots.length
+    const equipmentTotal = bookingRacketRentalQuantity * RACKET_RENTAL_PER_DAY
       + bookingShuttlecockQuantity * SHUTTLECOCK_PRICE
-    const deposit = totalPrice / 2
+    const totalPrice = courtTotal + equipmentTotal
+    const deposit = courtTotal / 2 + equipmentTotal
 
     setDraftReservation({
       slots,
@@ -383,7 +391,7 @@ export function App() {
       sport: selectedSport,
       deposit,
       totalPrice,
-      racketRental: bookingRacketRental,
+      racketRentalQuantity: bookingRacketRentalQuantity,
       shuttlecockQuantity: bookingShuttlecockQuantity,
     })
   }
@@ -409,7 +417,7 @@ export function App() {
           date: draftReservation.date,
           slots: draftReservation.slots,
           sport: draftReservation.sport,
-          racketRental: draftReservation.racketRental,
+          racketRentalQuantity: draftReservation.racketRentalQuantity,
           shuttlecockQuantity: draftReservation.shuttlecockQuantity,
         }),
       })
@@ -434,10 +442,10 @@ export function App() {
 
       setBookings((previous) => [result.booking, ...previous.filter((booking) => booking.id !== result.booking.id)])
       setSelectedSlots([])
-      setRacketRental(false)
+      setRacketRentalQuantity(0)
       setShuttlecockQuantity(0)
       setDraftReservation(null)
-      window.alert('Your reservation request was submitted. The 50% downpayment is due, and your reservation is pending admin approval.')
+      window.alert('Your reservation request was submitted. The amount due now is 50% of court fees plus the full equipment cost. Your reservation is pending admin approval.')
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Could not complete the reservation.')
     }
@@ -497,13 +505,15 @@ export function App() {
       return `"${safe.replace(/"/g, '""')}"`
     }
     const csv = [
-      ['Date', 'Player', 'Sport', 'Court schedule', 'Status', 'Total price PHP', 'Downpayment PHP'].map(escapeCsv).join(','),
+      ['Date', 'Player', 'Sport', 'Court schedule', 'Status', 'Rental rackets', 'Shuttlecocks', 'Total price PHP', 'Amount due now PHP'].map(escapeCsv).join(','),
       ...rows.map((booking) => [
         booking.date,
         booking.user,
         booking.sport,
         slotSummary(bookingSlots(booking)) || 'Equipment only',
         bookingStatusLabel(booking.status),
+        booking.racketRentalQuantity ?? (booking.racketRental ? 1 : 0),
+        booking.shuttlecockQuantity ?? 0,
         booking.totalPrice ?? booking.deposit,
         booking.deposit,
       ].map(escapeCsv).join(',')),
@@ -572,7 +582,7 @@ export function App() {
             </>
           ) : (
             authMode === 'signup' ? (
-              <button className="secondary" disabled={isAuthSubmitting} onClick={() => changeAuthMode('login')}>Back to Sign In</button>
+              <button className="secondary" disabled={isAuthSubmitting} onClick={() => changeAuthMode('login')}>Go back to Sign In</button>
             ) : (
               <>
                 <button className="primary" onClick={toggleAuthRole}>{authRole === 'player' ? 'Admin Log In' : 'Player Log In'}</button>
@@ -723,7 +733,7 @@ export function App() {
                       <h3>{courtSummary(bookingSlots(booking)) || 'Equipment only'}</h3>
                       <p>{formatDate(booking.date)}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
                       {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
-                      {booking.totalPrice != null ? <p className="muted">Total PHP {booking.totalPrice.toFixed(2)} · 50% downpayment PHP {booking.deposit.toFixed(2)}</p> : null}
+                      {booking.totalPrice != null ? <p className="muted">Total PHP {booking.totalPrice.toFixed(2)} · Amount due now PHP {booking.deposit.toFixed(2)}</p> : null}
                       <p className="status status--pending">Status: {bookingStatusLabel(booking.status)}</p>
                       <ReservationTimeline booking={booking} />
                     </div>
@@ -814,7 +824,7 @@ export function App() {
                 setSelectedSport(sport)
                 setSelectedSlots([])
                 if (sport !== 'Badminton') {
-                  setRacketRental(false)
+                  setRacketRentalQuantity(0)
                   setShuttlecockQuantity(0)
                 }
               }}>
@@ -923,12 +933,20 @@ export function App() {
             {selectedSport === 'Badminton' ? (
               <section className="addon-options">
                 <h3>Optional badminton add-ons</h3>
-                <label className="addon-checkbox">
-                  <input type="checkbox" checked={racketRental} onChange={(e) => setRacketRental((e.target as HTMLInputElement).checked)} />
+                <label className="addon-quantity">
                   <span>
-                    <strong>Rent a racket</strong>
-                    <small>PHP {RACKET_RENTAL_PER_DAY} per day</small>
+                    <strong>Rental rackets</strong>
+                    <small>PHP {RACKET_RENTAL_PER_DAY} per racket/day</small>
                   </span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={racketRentalQuantity}
+                    aria-label="Rental racket quantity"
+                    onInput={(e) => setRacketRentalQuantity(Math.min(100, Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0))))}
+                  />
                 </label>
                 <label className="addon-quantity">
                   <span>
@@ -938,10 +956,11 @@ export function App() {
                   <input
                     type="number"
                     min="0"
+                    max="100"
                     step="1"
                     value={shuttlecockQuantity}
                     aria-label="Shuttlecock quantity"
-                    onInput={(e) => setShuttlecockQuantity(Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0)))}
+                    onInput={(e) => setShuttlecockQuantity(Math.min(100, Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0))))}
                   />
                 </label>
               </section>
@@ -950,7 +969,7 @@ export function App() {
             <div className="booking-summary">
               <div>
                 <span>Selected courts</span>
-                <strong>{courtSummary(selectedSlots) || (racketRental || shuttlecockQuantity > 0 ? 'Equipment only' : 'Not selected')}</strong>
+                <strong>{courtSummary(selectedSlots) || (racketRentalQuantity > 0 || shuttlecockQuantity > 0 ? 'Equipment only' : 'Not selected')}</strong>
               </div>
               <div>
                 <span>Selected court-hours</span>
@@ -959,12 +978,12 @@ export function App() {
               <div>
                 <span>Total price · PHP {hourlyRate}/hour</span>
                 <strong>PHP {totalPayment.toFixed(2)}</strong>
-                <span>50% downpayment</span>
-                <strong>PHP {(totalPayment / 2).toFixed(2)}</strong>
+                <span>Amount due now · 50% court fees + full equipment</span>
+                <strong>PHP {amountDueNow.toFixed(2)}</strong>
               </div>
             </div>
 
-            <button type="button" className="primary wide" disabled={!(selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRental || shuttlecockQuantity > 0)))} onClick={handleBookingReview}>Review order</button>
+            <button type="button" className="primary wide" disabled={!canReviewOrder} onClick={handleBookingReview}>Review order</button>
           </section>
 
           <section className="panel" id="player-reservations">
@@ -993,7 +1012,7 @@ export function App() {
                       ) : null}
                       <span className="deposit-tag">
                         Total PHP {(booking.totalPrice ?? booking.deposit).toFixed(2)}
-                        {booking.totalPrice != null ? ` · 50% downpayment PHP ${booking.deposit.toFixed(2)}` : ''}
+                        {booking.totalPrice != null ? ` · Amount due now PHP ${booking.deposit.toFixed(2)}` : ''}
                       </span>
                     </div>
                   </div>
@@ -1006,7 +1025,7 @@ export function App() {
             <div className="payment-overlay" onClick={() => setDraftReservation(null)}>
               <aside className="payment-panel panel" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title" onClick={(e) => e.stopPropagation()}>
               <h2 id="payment-dialog-title">Reservation review</h2>
-              <p className="muted">Submitting creates a reservation request; payment is handled separately.</p>
+              <p className="muted">Submitting creates a reservation request; payment is handled separately. Half of court fees and the full equipment cost are due now.</p>
               {draftReservation.slots.length > 0
                 ? <p>Hourly rate: PHP {HOURLY_RATES[draftReservation.sport as keyof typeof HOURLY_RATES]} per hour.</p>
                 : <p>Equipment-only order; no court booking included.</p>}
@@ -1023,10 +1042,10 @@ export function App() {
                     <strong>{draftReservation.slots.length}</strong>
                   </>
                 ) : null}
-                {draftReservation.racketRental ? (
+                {draftReservation.racketRentalQuantity > 0 ? (
                   <>
-                    <span>Racket rental</span>
-                    <strong>PHP {RACKET_RENTAL_PER_DAY.toFixed(2)} / day</strong>
+                    <span>Rental rackets ×{draftReservation.racketRentalQuantity}</span>
+                    <strong>PHP {(draftReservation.racketRentalQuantity * RACKET_RENTAL_PER_DAY).toFixed(2)} / day</strong>
                   </>
                 ) : null}
                 {draftReservation.shuttlecockQuantity > 0 ? (
@@ -1037,7 +1056,7 @@ export function App() {
                 ) : null}
                 <span>Total price</span>
                 <strong>PHP {draftReservation.totalPrice.toFixed(2)}</strong>
-                <span>50% downpayment amount</span>
+                <span>Amount due now · 50% court fees + full equipment</span>
                 <strong>PHP {draftReservation.deposit.toFixed(2)}</strong>
               </div>
 
@@ -1053,10 +1072,10 @@ export function App() {
       {canReviewOrder && !draftReservation ? (
         <div className="quick-booking-bar" role="region" aria-label="Booking total">
           <div className="quick-booking-total" aria-live="polite">
-            <span>50% downpayment · total PHP {totalPayment.toFixed(2)}</span>
-            <strong>PHP {(totalPayment / 2).toFixed(2)}</strong>
+            <span>Amount due now · total PHP {totalPayment.toFixed(2)}</span>
+            <strong>PHP {amountDueNow.toFixed(2)}</strong>
           </div>
-          <button type="button" className="primary" onClick={handleBookingReview}>Review downpayment</button>
+          <button type="button" className="primary" onClick={handleBookingReview}>Review payment</button>
         </div>
       ) : null}
     </div>

@@ -1,7 +1,7 @@
 export const COURTS = [
-  { id: 1, name: 'Court 1', sports: ['Pickleball', 'Badminton'] },
-  { id: 2, name: 'Court 2', sports: ['Pickleball', 'Badminton'] },
-  { id: 3, name: 'Court 3', sports: ['Pickleball', 'Badminton'] },
+  { id: 1, name: 'Court 1', sports: ['Pickleball', 'Badminton', 'Sepak Takraw'] },
+  { id: 2, name: 'Court 2', sports: ['Pickleball', 'Badminton', 'Sepak Takraw'] },
+  { id: 3, name: 'Court 3', sports: ['Pickleball', 'Badminton', 'Sepak Takraw'] },
   { id: 4, name: 'Court 4', sports: ['Badminton'] },
   { id: 5, name: 'Court 5', sports: ['Badminton'] },
   { id: 6, name: 'Court 6', sports: ['Badminton'] },
@@ -10,10 +10,10 @@ export const COURTS = [
   { id: 9, name: 'Court 9', sports: ['Badminton'] },
 ]
 
-export const HOURLY_RATES = { Pickleball: 400, Badminton: 350 }
+export const HOURLY_RATES = { Pickleball: 400, Badminton: 350, 'Sepak Takraw': 400 }
 export const RACKET_RENTAL_PER_DAY = 100
 export const SHUTTLECOCK_PRICE = 140
-export const SPORTS = ['Pickleball', 'Badminton']
+export const SPORTS = ['Pickleball', 'Badminton', 'Sepak Takraw']
 
 export const HOURS = [
   '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00',

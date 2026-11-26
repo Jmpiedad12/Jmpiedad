@@ -242,11 +242,11 @@ export function AuthenticationView({
         <details className="reservation-rules">
           <summary>Reservation rules</summary>
           <ul>
-            <li>Courts 1-3 support Pickleball and Badminton.</li>
+            <li>Courts 1-3 support Pickleball, Badminton, and Sepak Takraw.</li>
             <li>Courts 4-9 are Badminton only.</li>
             <li>Occupied time slots are disabled in this booking view.</li>
-            <li>Hourly rate: PHP {HOURLY_RATES.Pickleball} for Pickleball and PHP {HOURLY_RATES.Badminton} for Badminton.</li>
-            <li>A 50% downpayment is due for reservations. Payment is handled separately; the site does not process payments.</li>
+            <li>Hourly rate: PHP {HOURLY_RATES.Pickleball} for Pickleball, PHP {HOURLY_RATES.Badminton} for Badminton, and PHP {HOURLY_RATES['Sepak Takraw']} for Sepak Takraw.</li>
+            <li>Amount due now is 50% of court fees plus the full cost of any equipment. Payment is handled separately; the site does not process payments.</li>
             <li>Admin can confirm or reject bookings and refund for rejected reservations.</li>
           </ul>
         </details>

@@ -11,13 +11,13 @@ const SESSION_DURATION = 8 * 60 * 60 * 1000
 const ADMIN_LIMIT = 5
 const DATA_DIRECTORY = path.join(process.cwd(), '.redcourt-data')
 const DATABASE_PATH = path.join(DATA_DIRECTORY, 'redcourt.sqlite')
-const HOURLY_RATES = { Pickleball: 400, Badminton: 350 }
+const HOURLY_RATES = { Pickleball: 400, Badminton: 350, 'Sepak Takraw': 400 }
 const RACKET_RENTAL_PER_DAY = 100
 const SHUTTLECOCK_PRICE = 140
 const COURT_SPORTS = {
-  1: ['Pickleball', 'Badminton'],
-  2: ['Pickleball', 'Badminton'],
-  3: ['Pickleball', 'Badminton'],
+  1: ['Pickleball', 'Badminton', 'Sepak Takraw'],
+  2: ['Pickleball', 'Badminton', 'Sepak Takraw'],
+  3: ['Pickleball', 'Badminton', 'Sepak Takraw'],
   4: ['Badminton'],
   5: ['Badminton'],
   6: ['Badminton'],
@@ -276,7 +276,7 @@ const notifyBookingStatus = async (booking, account) => {
     timeZone: 'UTC',
   }).format(new Date(`${booking.date}T00:00:00Z`))
   const courtTimes = bookingSlots(booking).map((slot) => `Court ${slot.courtId} ${slot.time}`).join(', ')
-  const message = `Hi ${account.name?.trim() || account.username}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was ${statusText}.${approved ? '' : ' Your downpayment will be handled according to the refund policy.'}`
+  const message = `Hi ${account.name?.trim() || account.username}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was ${statusText}.${approved ? '' : ' Any payment will be handled according to the refund policy.'}`
 
   if (account.email) {
     try {
@@ -404,9 +404,9 @@ const server = createServer(async (request, response) => {
       const date = String(body.date || '')
       const sport = String(body.sport || '')
       const slots = Array.isArray(body.slots) ? body.slots : []
-      const racketRental = body.racketRental === true
+      const racketRentalQuantity = Number(body.racketRentalQuantity ?? (body.racketRental === true ? 1 : 0))
       const shuttlecockQuantity = Number(body.shuttlecockQuantity || 0)
-      const equipmentOnly = slots.length === 0 && (racketRental || shuttlecockQuantity > 0)
+      const equipmentOnly = slots.length === 0 && (racketRentalQuantity > 0 || shuttlecockQuantity > 0)
       if (!validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !validBookingSlots(slots, sport, true)) {
         return sendJson(response, 400, { error: 'Reservation date, sport, or time slots are invalid.' })
       }
@@ -416,7 +416,10 @@ const server = createServer(async (request, response) => {
       if (!Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100) {
         return sendJson(response, 400, { error: 'Shuttlecock quantity must be between 0 and 100.' })
       }
-      if ((racketRental || shuttlecockQuantity > 0) && sport !== 'Badminton') {
+      if (!Number.isInteger(racketRentalQuantity) || racketRentalQuantity < 0 || racketRentalQuantity > 100) {
+        return sendJson(response, 400, { error: 'Racket rental quantity must be between 0 and 100.' })
+      }
+      if ((racketRentalQuantity > 0 || shuttlecockQuantity > 0) && sport !== 'Badminton') {
         return sendJson(response, 400, { error: 'Racket rental and shuttlecocks are only available for Badminton.' })
       }
       if (slots.length === 0 && !equipmentOnly) {
@@ -428,9 +431,10 @@ const server = createServer(async (request, response) => {
         return sendJson(response, 409, { error: 'One or more selected court times were just reserved. Refresh availability and choose another slot.' })
       }
 
-      const totalPrice = HOURLY_RATES[sport] * slots.length
-        + (racketRental ? RACKET_RENTAL_PER_DAY : 0)
+      const courtTotal = HOURLY_RATES[sport] * slots.length
+      const equipmentTotal = racketRentalQuantity * RACKET_RENTAL_PER_DAY
         + shuttlecockQuantity * SHUTTLECOCK_PRICE
+      const totalPrice = courtTotal + equipmentTotal
       const booking = {
         id: randomBytes(12).toString('hex'),
         user: account.username,
@@ -438,8 +442,9 @@ const server = createServer(async (request, response) => {
         slots,
         sport,
         totalPrice,
-        deposit: totalPrice / 2,
-        racketRental,
+        deposit: courtTotal / 2 + equipmentTotal,
+        racketRental: racketRentalQuantity > 0,
+        racketRentalQuantity,
         shuttlecockQuantity,
         status: 'pending',
         createdAt: new Date().toISOString(),
@@ -473,12 +478,13 @@ const server = createServer(async (request, response) => {
         const date = String(legacy.date || '')
         const sport = String(legacy.sport || '')
         const slots = bookingSlots(legacy)
-        const racketRental = legacy.racketRental === true
+        const racketRentalQuantity = Number(legacy.racketRentalQuantity ?? (legacy.racketRental === true ? 1 : 0))
         const shuttlecockQuantity = Number(legacy.shuttlecockQuantity || 0)
         const status = ['pending', 'confirmed', 'cancelled', 'rejected', 'completed'].includes(legacy.status) ? legacy.status : null
         if (!account || !validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !status ||
-          !validBookingSlots(slots, sport, true) || !Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100 ||
-          (slots.length === 0 && !racketRental && shuttlecockQuantity === 0)) continue
+          !validBookingSlots(slots, sport, true) || !Number.isInteger(racketRentalQuantity) || racketRentalQuantity < 0 || racketRentalQuantity > 100 ||
+          !Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100 ||
+          (slots.length === 0 && racketRentalQuantity === 0 && shuttlecockQuantity === 0)) continue
         if (reservationOccupiesSlot(status) && hasBookingConflict(bookings, date, slots)) {
           skippedConflicts += 1
           continue
@@ -491,7 +497,8 @@ const server = createServer(async (request, response) => {
           sport,
           deposit: Number.isFinite(Number(legacy.deposit)) ? Number(legacy.deposit) : 0,
           totalPrice: Number.isFinite(Number(legacy.totalPrice)) ? Number(legacy.totalPrice) : undefined,
-          racketRental,
+          racketRental: racketRentalQuantity > 0,
+          racketRentalQuantity,
           shuttlecockQuantity,
           status,
           createdAt: legacy.createdAt || new Date().toISOString(),

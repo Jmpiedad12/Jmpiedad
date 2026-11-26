@@ -19,6 +19,7 @@ export type Booking = {
   deposit: number
   totalPrice?: number
   racketRental?: boolean
+  racketRentalQuantity?: number
   shuttlecockQuantity?: number
   status: string
   createdAt?: string
@@ -60,7 +61,10 @@ export const courtSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slo
   .map((courtId) => COURTS.find((court) => court.id === courtId)?.name)
   .filter(Boolean)
   .join(', ')
-export const bookingAddOns = (booking: Booking) => [
-  booking.racketRental ? `Racket rental (PHP ${RACKET_RENTAL_PER_DAY}/day)` : null,
-  booking.shuttlecockQuantity ? `Shuttlecock ×${booking.shuttlecockQuantity} (PHP ${SHUTTLECOCK_PRICE} each)` : null,
-].filter(Boolean).join(' · ')
+export const bookingAddOns = (booking: Booking) => {
+  const racketRentalQuantity = booking.racketRentalQuantity ?? (booking.racketRental ? 1 : 0)
+  return [
+    racketRentalQuantity ? `Racket rental ×${racketRentalQuantity} (PHP ${RACKET_RENTAL_PER_DAY}/day each)` : null,
+    booking.shuttlecockQuantity ? `Shuttlecock ×${booking.shuttlecockQuantity} (PHP ${SHUTTLECOCK_PRICE} each)` : null,
+  ].filter(Boolean).join(' · ')
+}
