@@ -37,17 +37,14 @@ npm install
 npm run dev
 ```
 
-Signup verification codes are generated, emailed, and verified by Supabase Auth. In the
-Supabase dashboard, enable email confirmations, configure your Google SMTP settings under
-Authentication > SMTP Settings, and set the confirmation email template to display the
-`{{ .Token }}` code. Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Vercel's server-side
-environment variables and the ignored local `.env` file. Redeploy after changing Vercel
-environment variables. Reservation approval/rejection emails use Google SMTP directly.
-Set `SMTP_USER`, `SMTP_PASS` (a Google App Password), and optionally `SMTP_FROM`,
-`SMTP_HOST`, and `SMTP_PORT` in the ignored local `.env` file and Vercel's server-side
-environment variables. Supabase's SMTP dashboard settings are only for Supabase Auth
-emails; these application notifications need their own SMTP credentials. Reservation SMS
-notifications still use Twilio environment variables.
+Supabase Auth generates and verifies signup OTPs; the server sends those codes using the
+configured Google SMTP account. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
+`SUPABASE_SERVICE_ROLE_KEY` in the local `.env` and Vercel's server-side environment
+variables. Reservation approval/rejection emails use the same SMTP sender. Configure
+`SMTP_USER`, `SMTP_PASS` (a Google App Password), and optionally `SMTP_FROM`, `SMTP_HOST`,
+and `SMTP_PORT` in both environments. Redeploy after changing Vercel environment
+variables. Supabase's SMTP settings are not used by this custom OTP delivery flow.
+Reservation SMS notifications still use Twilio environment variables.
 Reservation status updates are saved to each booking and shown in the player reservation
 timeline. Vercel routes `/api/*` requests through the Supabase-backed API function.
 

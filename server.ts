@@ -619,7 +619,12 @@ const server = createServer(async (request, response) => {
       if (!allowAttempt(otpAttempts, rateKey, 3, 60 * 60 * 1000)) {
         return sendJson(response, 429, { error: 'Too many OTP requests. Try again later.' })
       }
-      await sendSignupOtp(email, password)
+      const otp = await sendSignupOtp(email, password)
+      await sendEmailNotification(
+        email,
+        'Your Red Court verification code',
+        `Your Red Court verification code is ${otp}.`,
+      )
       return sendJson(response, 200, { message: 'Verification code sent. Check your email.' })
     }
 

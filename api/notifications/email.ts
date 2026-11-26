@@ -19,6 +19,9 @@ export const sendEmailNotification = async (to: string, subject: string, text: s
     port,
     secure: port === 465,
     auth: { user, pass: password },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   })
 
   await transporter.sendMail({ from, to, subject, text })
