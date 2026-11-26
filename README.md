@@ -40,7 +40,9 @@ npm run dev
 Supabase Auth generates and verifies signup OTPs; the server sends those codes using the
 configured Google SMTP account. Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
 `SUPABASE_SERVICE_ROLE_KEY` in the local `.env` and Vercel's server-side environment
-variables. Reservation approval/rejection emails use the same SMTP sender. Configure
+variables, and set Supabase Auth's email OTP length (`mailer_otp_length`) to 6. The app
+rejects codes of any other length rather than sending a code the signup form cannot accept.
+Reservation approval/rejection emails use the same SMTP sender. Configure
 `SMTP_USER`, `SMTP_PASS` (a Google App Password), and optionally `SMTP_FROM`, `SMTP_HOST`,
 and `SMTP_PORT` in both environments. Redeploy after changing Vercel environment
 variables. Supabase's SMTP settings are not used by this custom OTP delivery flow.

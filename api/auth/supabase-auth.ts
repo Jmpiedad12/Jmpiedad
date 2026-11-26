@@ -48,6 +48,9 @@ export const sendSignupOtp = async (email: string, password: string) => {
   if (error) throw error
   const token = data.properties.email_otp
   if (!token) throw new Error('Supabase did not return an email verification code.')
+  if (!/^\d{6}$/.test(token)) {
+    throw new Error('Supabase Auth must be configured to generate six-digit email OTPs.')
+  }
   return token
 }
 
