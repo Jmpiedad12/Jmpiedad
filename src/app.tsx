@@ -568,7 +568,11 @@ export function App() {
     ? bookings.filter((booking) => booking.user === currentUser.username)
     : []
 
-  const adminReservations = [...bookings].sort((a, b) => a.date.localeCompare(b.date))
+  const adminReservations = [...bookings].sort((a, b) => {
+    const pendingOrder = Number(b.status === 'pending') - Number(a.status === 'pending')
+    return pendingOrder || a.date.localeCompare(b.date)
+  })
+  const pendingReservationCount = adminReservations.filter((booking) => booking.status === 'pending').length
 
   // Increment 6: connect the feature views into the complete website.
   return (
@@ -652,6 +656,7 @@ export function App() {
         />
       ) : currentUser.role === 'admin' ? (
         <main className="dashboard admin-dashboard" id="main-content">
+          <div className="admin-overview">
           <section className="panel schedule-panel" id="admin-schedule">
             <div className="panel-header">
               <h2>Admin court schedule</h2>
@@ -721,6 +726,74 @@ export function App() {
             </div>
           </section>
 
+          <aside className="admin-approval-sidebar" aria-label="Approval requests">
+            <section className="panel" id="admin-reservations">
+              <div className="panel-header">
+                <h2>Reservation requests</h2>
+                <span className="muted">{pendingReservationCount} pending</span>
+              </div>
+              {bookingSyncNotice ? <p className="auth-error" role="status">{bookingSyncNotice}</p> : null}
+
+              <div className="reservation-list">
+                {adminReservations.map((booking) => (
+                  <div key={booking.id} className="reservation-card">
+                    <div>
+                      <p className="muted">{booking.user}</p>
+                      <h3>{courtSummary(bookingSlots(booking)) || 'Equipment only'}</h3>
+                      <p>{formatDate(booking.date)}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
+                      {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
+                      {booking.totalPrice != null ? <p className="muted">Total PHP {booking.totalPrice.toFixed(2)} · 50% downpayment PHP {booking.deposit.toFixed(2)}</p> : null}
+                      <p className="status status--pending">Status: {bookingStatusLabel(booking.status)}</p>
+                      <ReservationTimeline booking={booking} />
+                    </div>
+
+                    <div className="reservation-actions">
+                      {booking.status === 'pending' && (
+                        <>
+                          <button className="primary" onClick={() => handleAdminAction(booking.id, 'confirm')}>Approve</button>
+                          <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
+                        </>
+                      )}
+                      {booking.status === 'confirmed' && (
+                        <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel admin-requests-panel" id="admin-accounts">
+              <div className="panel-header">
+                <h2>Admin account requests</h2>
+                <span className="muted">{adminCount}/{adminLimit} accounts</span>
+              </div>
+              {adminRequestError ? <p className="auth-error" role="alert">{adminRequestError}</p> : null}
+              {adminCount >= adminLimit && adminRequests.length > 0
+                ? <p className="auth-error" role="status">The admin account limit has been reached. Requests cannot be approved.</p>
+                : null}
+              {adminRequests.length === 0 ? (
+                <p className="muted">No admin account requests pending.</p>
+              ) : (
+                <div className="reservation-list">
+                  {adminRequests.map((request) => (
+                    <div key={request.username} className="reservation-card">
+                      <div>
+                        <h3>{request.username}</h3>
+                        <p className="muted">{request.contact}</p>
+                      </div>
+                      <div className="reservation-actions">
+                        <button className="primary" disabled={adminCount >= adminLimit} onClick={() => handleAdminRequest(request.username, 'approve')}>Approve</button>
+                        <button className="secondary danger" onClick={() => handleAdminRequest(request.username, 'reject')}>Reject</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </aside>
+          </div>
+
           <section className="panel report-panel" id="admin-reports">
             <div className="panel-header">
               <div>
@@ -741,72 +814,6 @@ export function App() {
               return booking.date >= range.start && booking.date <= range.end
             }).length} reservations in this period.</p>
             <button type="button" className="secondary" onClick={downloadScheduleReport}>Download CSV report</button>
-          </section>
-
-          <section className="panel" id="admin-reservations">
-            <div className="panel-header">
-              <h2>Reservation requests</h2>
-            </div>
-            {bookingSyncNotice ? <p className="auth-error" role="status">{bookingSyncNotice}</p> : null}
-
-            <div className="reservation-list">
-              {adminReservations.map((booking) => (
-                <div key={booking.id} className="reservation-card">
-                  <div>
-                    <p className="muted">{booking.user}</p>
-                    <h3>{courtSummary(bookingSlots(booking)) || 'Equipment only'}</h3>
-                    <p>{formatDate(booking.date)}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
-                    {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
-                    {booking.totalPrice != null ? <p className="muted">Total PHP {booking.totalPrice.toFixed(2)} · 50% downpayment PHP {booking.deposit.toFixed(2)}</p> : null}
-                    <p className="status status--pending">Status: {bookingStatusLabel(booking.status)}</p>
-                    <ReservationTimeline booking={booking} />
-                  </div>
-
-                  <div className="reservation-actions">
-                    {booking.status === 'pending' && (
-                      <>
-                        <button className="primary" onClick={() => handleAdminAction(booking.id, 'confirm')}>Approve</button>
-                        <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
-                      </>
-                    )}
-                    {booking.status === 'confirmed' && (
-                      <>
-                        <button className="secondary danger" onClick={() => handleAdminAction(booking.id, 'reject')}>Reject & refund</button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="panel admin-requests-panel" id="admin-accounts">
-            <div className="panel-header">
-              <h2>Admin account requests</h2>
-              <span className="muted">{adminCount}/{adminLimit} accounts</span>
-            </div>
-            {adminRequestError ? <p className="auth-error" role="alert">{adminRequestError}</p> : null}
-            {adminCount >= adminLimit && adminRequests.length > 0
-              ? <p className="auth-error" role="status">The admin account limit has been reached. Requests cannot be approved.</p>
-              : null}
-            {adminRequests.length === 0 ? (
-              <p className="muted">No admin account requests pending.</p>
-            ) : (
-              <div className="reservation-list">
-                {adminRequests.map((request) => (
-                  <div key={request.username} className="reservation-card">
-                    <div>
-                      <h3>{request.username}</h3>
-                      <p className="muted">{request.contact}</p>
-                    </div>
-                    <div className="reservation-actions">
-                      <button className="primary" disabled={adminCount >= adminLimit} onClick={() => handleAdminRequest(request.username, 'approve')}>Approve</button>
-                      <button className="secondary danger" onClick={() => handleAdminRequest(request.username, 'reject')}>Reject</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </section>
         </main>
       ) : (

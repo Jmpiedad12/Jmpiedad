@@ -834,6 +834,10 @@ select {
     grid-template-columns: 1fr;
   }
 
+  .admin-dashboard .admin-overview {
+    grid-template-columns: 1fr;
+  }
+
   .topbar,
   .panel-header,
   .reservation-card {
@@ -1230,6 +1234,29 @@ a:focus-visible {
   gap: 0.4rem;
   color: #404040;
   font-weight: 600;
+}
+
+.admin-dashboard .admin-overview {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  align-items: start;
+  gap: 1.5rem;
+}
+
+.admin-approval-sidebar {
+  display: grid;
+  min-width: 0;
+  gap: 1.5rem;
+}
+
+.admin-approval-sidebar .reservation-card {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.admin-approval-sidebar .reservation-actions {
+  width: 100%;
 }
 
 .admin-dashboard .report-panel {
