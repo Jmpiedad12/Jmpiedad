@@ -484,7 +484,7 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
       const racketRental = body.racketRental === true
       const shuttlecockQuantity = Number(body.shuttlecockQuantity || 0)
       const equipmentOnly = Array.isArray(slots) && slots.length === 0 && (racketRental || shuttlecockQuantity > 0)
-      if (!validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !validBookingSlots(slots, sport, true)) {
+      if (!validBookingDate(date) || !Object.prototype.hasOwnProperty.call(HOURLY_RATES, sport) || !validBookingSlots(slots, sport, true)) {
         return sendJson(response, 400, { error: 'Reservation date, sport, or time slots are invalid.' })
       }
       if (!isFutureBooking(date, slots)) {
@@ -554,7 +554,7 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
         const racketRental = legacy.racketRental === true
         const shuttlecockQuantity = Number(legacy.shuttlecockQuantity || 0)
         const status = ['pending', 'confirmed', 'cancelled', 'rejected', 'completed'].includes(legacy.status) ? legacy.status : null
-        if (!account || !validBookingDate(date) || !Object.hasOwn(HOURLY_RATES, sport) || !status ||
+        if (!account || !validBookingDate(date) || !Object.prototype.hasOwnProperty.call(HOURLY_RATES, sport) || !status ||
           !validBookingSlots(slots, sport, true) || !Number.isInteger(shuttlecockQuantity) || shuttlecockQuantity < 0 || shuttlecockQuantity > 100 ||
           (slots.length === 0 && !racketRental && shuttlecockQuantity === 0)) continue
 

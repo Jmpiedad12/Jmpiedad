@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "concurrently -k \"node --experimental-strip-types --env-file-if-exists=.env server.ts\" \"vite --host 0.0.0.0\"",
