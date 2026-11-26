@@ -288,7 +288,9 @@ const deliverSms = async (contact: string, message: string) => {
 
 const deliverEmail = async (contact: string, subject: string, message: string) => {
   const { RESEND_API_KEY, RESEND_FROM } = process.env
-  if (!RESEND_API_KEY || !RESEND_FROM) throw new Error('Email delivery is not configured on the server.')
+  if (!RESEND_API_KEY || !RESEND_FROM) {
+    throw new Error('Email sending is not configured. Set RESEND_API_KEY and RESEND_FROM in the server environment.')
+  }
   const result = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },

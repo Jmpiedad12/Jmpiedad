@@ -37,8 +37,13 @@ npm install
 npm run dev
 ```
 
-Email OTPs and reservation email/SMS notifications require the corresponding Resend or
-Twilio environment variables. OTP codes expire after ten minutes and are consumed once.
+Email OTPs require `RESEND_API_KEY` and `RESEND_FROM`. Create a Resend API key and verify
+the sender domain/address configured in `RESEND_FROM`, then add both variables to Vercel's
+server-side environment variables (Production, and Preview/Development if those deployments
+need email too). Redeploy after changing Vercel environment variables. For local development,
+put them in the ignored `.env` file; never commit the API key. Reservation email/SMS
+notifications require the corresponding Resend or Twilio environment variables. OTP codes
+expire after ten minutes and are consumed once.
 Reservation status updates are saved to each booking and shown in the player reservation
 timeline. Vercel routes `/api/*` requests through the Supabase-backed API function.
 

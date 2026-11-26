@@ -834,10 +834,6 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .admin-dashboard .admin-overview {
-    grid-template-columns: 1fr;
-  }
-
   .topbar,
   .panel-header,
   .reservation-card {
@@ -854,6 +850,12 @@ select {
   }
 
   .range-booking-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-dashboard .admin-overview {
     grid-template-columns: 1fr;
   }
 }
