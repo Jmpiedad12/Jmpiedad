@@ -394,10 +394,15 @@ const errorStatus = (error: unknown) => {
   const candidate = error as { status?: number; code?: string; message?: string }
   if (candidate.status) return candidate.status
   if (candidate.code === '40001') return 409
+  if (['PGRST202', 'PGRST205', '42P01', '42703', '42883'].includes(candidate.code || '')) return 503
   if (candidate.code === '23505' || /duplicate key|unique constraint/i.test(candidate.message || '')) return 409
   if (/not configured|provider could not send/i.test(candidate.message || '')) return 503
   return 500
 }
+
+const isMissingSupabaseSchema = (error: unknown) => (
+  ['PGRST202', 'PGRST205', '42P01', '42703', '42883'].includes((error as { code?: string }).code || '')
+)
 
 const handler = async (request: IncomingMessage, response: ServerResponse) => {
   try {
@@ -862,7 +867,9 @@ const handler = async (request: IncomingMessage, response: ServerResponse) => {
     if (status >= 500) console.error('API request failed:', error)
     const message = error instanceof Error ? error.message : 'Request failed.'
     return sendJson(response, status, {
-      error: status === 500 ? 'The server could not complete the request.' : message,
+      error: isMissingSupabaseSchema(error)
+        ? 'Supabase setup is incomplete. Apply the serverless reservations migration, then retry.'
+        : status === 500 ? 'The server could not complete the request.' : message,
     })
   }
 }
