@@ -248,10 +248,11 @@ export function App() {
     try {
       const email = authForm.email.trim().toLowerCase()
       if (!email) throw new Error('Enter your email address before requesting a verification code.')
+      if (authForm.password.length < 10) throw new Error('Enter a password with at least 10 characters before requesting a verification code.')
       const response = await fetch('/api/auth/otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contact: email }),
+        body: JSON.stringify({ email, password: authForm.password }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Could not send OTP.')
@@ -643,9 +644,9 @@ export function App() {
             setAuthForm((previous) => ({
               ...previous,
               [field]: value,
-              ...(field === 'email' ? { otp: '' } : {}),
+              ...(['email', 'password'].includes(field) ? { otp: '' } : {}),
             }))
-            if (field === 'email') {
+            if (field === 'email' || field === 'password') {
               setOtpSent(false)
               setOtpMessage('')
             }

@@ -11,12 +11,12 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.119.2",
     "nodemailer": "^10.6.0",
-    "preact": "^10.29.8",
-    "resend": "^6.39.0"
+    "preact": "^10.29.8"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",
     "@types/node": "^24.13.3",
+    "@types/nodemailer": "^8.0.2",
     "concurrently": "^10.0.5",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"

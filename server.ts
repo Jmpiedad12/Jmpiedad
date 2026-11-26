@@ -1,12 +1,13 @@
-import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { sendSignupOtp, verifySignupOtp } from './api/auth/supabase-auth.ts'
+import { sendEmailNotification } from './api/notifications/email.ts'
 
 const PORT = Number(process.env.AUTH_PORT || 4174)
 const SESSION_DURATION = 8 * 60 * 60 * 1000
-const OTP_DURATION = 10 * 60 * 1000
 const ADMIN_LIMIT = 5
 const DATA_DIRECTORY = path.join(process.cwd(), '.redcourt-data')
 const DATABASE_PATH = path.join(DATA_DIRECTORY, 'redcourt.sqlite')
@@ -26,7 +27,6 @@ const COURT_SPORTS = {
 }
 const BOOKING_TIMES = new Set(Array.from({ length: 14 }, (_, index) => `${String(index + 8).padStart(2, '0')}:00`))
 const sessions = new Map()
-const pendingOtps = new Map()
 const authAttempts = new Map()
 const otpAttempts = new Map()
 
@@ -265,19 +265,6 @@ const deliverSms = async (contact, message) => {
   if (!result.ok) throw new Error('The SMS provider could not send the message.')
 }
 
-const deliverEmail = async (contact, subject, message) => {
-  const { RESEND_API_KEY, RESEND_FROM } = process.env
-  if (!RESEND_API_KEY || !RESEND_FROM) {
-    throw new Error('Email sending is not configured. Set RESEND_API_KEY and RESEND_FROM in the server environment.')
-  }
-  const result = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: RESEND_FROM, to: [contact], subject, text: message }),
-  })
-  if (!result.ok) throw new Error('The email provider could not send the reservation update.')
-}
-
 const notifyBookingStatus = async (booking, account) => {
   const approved = booking.status === 'confirmed'
   const statusText = approved ? 'approved' : 'rejected'
@@ -291,9 +278,9 @@ const notifyBookingStatus = async (booking, account) => {
   const courtTimes = bookingSlots(booking).map((slot) => `Court ${slot.courtId} ${slot.time}`).join(', ')
   const message = `Hi ${account.name?.trim() || account.username}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was ${statusText}.${approved ? '' : ' Your downpayment will be handled according to the refund policy.'}`
 
-  if (account.email && process.env.RESEND_API_KEY && process.env.RESEND_FROM) {
+  if (account.email) {
     try {
-      await deliverEmail(account.email, `Red Court reservation ${statusText}`, message)
+      await sendEmailNotification(account.email, `Red Court reservation ${statusText}`, message)
     } catch (error) {
       console.error(`Reservation email notification failed for booking ${booking.id}:`, error)
     }
@@ -306,32 +293,6 @@ const notifyBookingStatus = async (booking, account) => {
       console.error(`Reservation SMS notification failed for booking ${booking.id}:`, error)
     }
   }
-}
-
-const deliverOtp = async (contact, code) => {
-  if (isEmail(contact)) {
-    const { RESEND_API_KEY, RESEND_FROM } = process.env
-    if (!RESEND_API_KEY || !RESEND_FROM) throw new Error('Email OTP delivery is not configured on the server.')
-    const result = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: RESEND_FROM,
-        to: [contact],
-        subject: 'Your Red Court verification code',
-        text: `Your Red Court verification code is ${code}. It expires in 10 minutes.`,
-      }),
-    })
-    if (!result.ok) throw new Error('The email provider could not send the OTP.')
-    return
-  }
-
-  if (isPhone(contact)) {
-    await deliverSms(contact, `Your Red Court verification code is ${code}. It expires in 10 minutes.`)
-    return
-  }
-
-  throw new Error('Enter a valid email address or phone number.')
 }
 
 const readSession = (request) => {
@@ -650,16 +611,16 @@ const server = createServer(async (request, response) => {
 
     if (route === 'POST /api/auth/otp') {
       const body = await readBody(request)
-      const contact = normalizeContact(String(body.contact || ''))
-      if (!isEmail(contact)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
-      const rateKey = `${requestIp(request)}:${contact}`
+      const email = normalizeContact(String(body.email || ''))
+      const password = String(body.password || '')
+      if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
+      if (password.length < 10) return sendJson(response, 400, { error: 'Password must be at least 10 characters.' })
+      const rateKey = `${requestIp(request)}:${email}`
       if (!allowAttempt(otpAttempts, rateKey, 3, 60 * 60 * 1000)) {
         return sendJson(response, 429, { error: 'Too many OTP requests. Try again later.' })
       }
-      const code = String(randomInt(100000, 1000000))
-      await deliverOtp(contact, code)
-      pendingOtps.set(contact, { hash: createHash('sha256').update(code).digest('hex'), expiresAt: Date.now() + OTP_DURATION, attempts: 0 })
-      return sendJson(response, 200, { message: 'OTP sent. It expires in 10 minutes.' })
+      await sendSignupOtp(email, password)
+      return sendJson(response, 200, { message: 'Verification code sent. Check your email.' })
     }
 
     if (route === 'POST /api/auth/register') {
@@ -680,17 +641,6 @@ const server = createServer(async (request, response) => {
       if (!isPhone(phone)) return sendJson(response, 400, { error: 'Enter a valid contact number.' })
       if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
 
-      const pending = pendingOtps.get(email)
-      const submittedHash = createHash('sha256').update(otp).digest('hex')
-      const hashesMatch = pending && timingSafeEqual(Buffer.from(pending.hash, 'hex'), Buffer.from(submittedHash, 'hex'))
-      if (!pending || pending.expiresAt <= Date.now() || !hashesMatch || !/^\d{6}$/.test(otp)) {
-        if (pending) {
-          pending.attempts += 1
-          if (pending.attempts >= 5) pendingOtps.delete(email)
-        }
-        return sendJson(response, 400, { error: 'The OTP is invalid or expired.' })
-      }
-
       const accounts = readAccounts()
       if (accounts.some((account) => account.username.toLowerCase() === username.toLowerCase())) {
         return sendJson(response, 409, { error: 'That username is already in use.' })
@@ -706,11 +656,13 @@ const server = createServer(async (request, response) => {
         return sendJson(response, 409, { error: `The limit of ${ADMIN_LIMIT} admin accounts has been reached.` })
       }
 
+      if (!/^\d{6}$/.test(otp)) return sendJson(response, 400, { error: 'The OTP is invalid or expired.' })
+      await verifySignupOtp(email, otp)
+
       const credentials = hashPassword(password)
       const account = { username, role, name, phone, email, contact: phone, ...credentials }
       accounts.push(account)
       saveAccounts(accounts)
-      pendingOtps.delete(email)
       if (role === 'admin-pending') {
         return sendJson(response, 202, { pendingApproval: true, message: 'Your admin account request was sent for approval.' })
       }

@@ -23,12 +23,12 @@ Local development stores accounts, reservations, and schedule blocks in
 migration backups.
 
 Vercel API requests use Supabase. Accounts remain in the existing `app_data` table;
-reservations, reserved court slots, schedule blocks, OTPs, rate limits, and sessions use
-the tables and RPC functions defined in
+reservations, reserved court slots, schedule blocks, rate limits, and sessions use the
+tables and RPC functions defined in
 `supabase/migrations/20261126000000_serverless_reservations.sql`. Apply that migration
-to the Supabase project before deploying. Configure `SUPABASE_URL` and
-`SUPABASE_SERVICE_ROLE_KEY` in Vercel's server-side environment variables; never expose
-the service-role key to the browser.
+to the Supabase project before deploying. Configure `SUPABASE_URL`,
+`SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` in Vercel's server-side
+environment variables; never expose the service-role key to the browser.
 
 ## Run locally
 
@@ -37,13 +37,17 @@ npm install
 npm run dev
 ```
 
-Email OTPs require `RESEND_API_KEY` and `RESEND_FROM`. Create a Resend API key and verify
-the sender domain/address configured in `RESEND_FROM`, then add both variables to Vercel's
-server-side environment variables (Production, and Preview/Development if those deployments
-need email too). Redeploy after changing Vercel environment variables. For local development,
-put them in the ignored `.env` file; never commit the API key. Reservation email/SMS
-notifications require the corresponding Resend or Twilio environment variables. OTP codes
-expire after ten minutes and are consumed once.
+Signup verification codes are generated, emailed, and verified by Supabase Auth. In the
+Supabase dashboard, enable email confirmations, configure your Google SMTP settings under
+Authentication > SMTP Settings, and set the confirmation email template to display the
+`{{ .Token }}` code. Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Vercel's server-side
+environment variables and the ignored local `.env` file. Redeploy after changing Vercel
+environment variables. Reservation approval/rejection emails use Google SMTP directly.
+Set `SMTP_USER`, `SMTP_PASS` (a Google App Password), and optionally `SMTP_FROM`,
+`SMTP_HOST`, and `SMTP_PORT` in the ignored local `.env` file and Vercel's server-side
+environment variables. Supabase's SMTP dashboard settings are only for Supabase Auth
+emails; these application notifications need their own SMTP credentials. Reservation SMS
+notifications still use Twilio environment variables.
 Reservation status updates are saved to each booking and shown in the player reservation
 timeline. Vercel routes `/api/*` requests through the Supabase-backed API function.
 

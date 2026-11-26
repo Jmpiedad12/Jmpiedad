@@ -202,7 +202,9 @@ export function AuthenticationView({
               </label>
 
               <div className="otp-row">
-                <button type="button" className="secondary" onClick={onGenerateOtp}>{otpSent ? 'Resend email OTP' : 'Send verification code to email'}</button>
+                <button type="button" className="secondary" onClick={onGenerateOtp}>
+                  {otpSent ? 'Send another verification code' : 'Send email verification code'}
+                </button>
               </div>
               {otpMessage ? <p className="otp-message" role="status">{otpMessage}</p> : null}
 
