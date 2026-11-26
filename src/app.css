@@ -1305,6 +1305,12 @@ a:focus-visible {
   box-shadow: 0 4px 14px rgba(20, 20, 20, 0.045);
 }
 
+.addon-options .addon-quantity,
+.addon-options .addon-quantity small,
+.addon-options .addon-quantity input {
+  color: #171717;
+}
+
 .reservation-card {
   border-left: 3px solid #dc2626;
 }
