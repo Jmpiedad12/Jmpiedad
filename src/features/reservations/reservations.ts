@@ -1,11 +1,12 @@
 import {
   COURTS,
+  clockTimeToMinutes,
   formatTimeRange,
   RACKET_RENTAL_PER_DAY,
   SHUTTLECOCK_PRICE,
 } from '../courts/schedule'
 
-export type BookingSlot = { courtId: number; time: string }
+export type BookingSlot = { courtId: number; time: string; durationMinutes?: number }
 
 export type Booking = {
   id: string
@@ -44,6 +45,15 @@ export const formatDateTime = (dateTime: string) => new Intl.DateTimeFormat('en-
 
 export const bookingStatusLabel = (status: string) => status === 'confirmed' ? 'approved' : status
 export const reservationOccupiesSlot = (status: string) => status === 'pending' || status === 'confirmed'
+export const bookingSlotsOverlap = (left: BookingSlot, right: BookingSlot) => {
+  if (left.courtId !== right.courtId) return false
+  const leftStart = clockTimeToMinutes(left.time)
+  const rightStart = clockTimeToMinutes(right.time)
+  const leftEnd = leftStart + (left.durationMinutes ?? 60)
+  const rightEnd = rightStart + (right.durationMinutes ?? 60)
+  return leftStart < rightEnd && rightStart < leftEnd
+}
+export const bookingSlotHours = (slot: BookingSlot) => (slot.durationMinutes ?? 60) / 60
 export const slotStatusLabel = (status: string) => ({
   pending: 'Pending approval',
   confirmed: 'Reserved',
@@ -55,7 +65,7 @@ export const bookingSlots = (booking: Booking): BookingSlot[] => booking.slots ?
   booking.courtId == null ? [] : bookingTimes(booking).map((time) => ({ courtId: booking.courtId as number, time }))
 )
 export const slotSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
-  .map((courtId) => `${COURTS.find((court) => court.id === courtId)?.name}: ${slots.filter((slot) => slot.courtId === courtId).map((slot) => formatTimeRange(slot.time)).join(', ')}`)
+  .map((courtId) => `${COURTS.find((court) => court.id === courtId)?.name}: ${slots.filter((slot) => slot.courtId === courtId).map((slot) => formatTimeRange(slot.time, slot.durationMinutes)).join(', ')}`)
   .join(' · ')
 export const courtSummary = (slots: BookingSlot[]) => [...new Set(slots.map((slot) => slot.courtId))]
   .map((courtId) => COURTS.find((court) => court.id === courtId)?.name)

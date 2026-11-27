@@ -15,24 +15,39 @@ export const RACKET_RENTAL_PER_DAY = 100
 export const SHUTTLECOCK_PRICE = 140
 export const SPORTS = ['Pickleball', 'Badminton', 'Sepak Takraw']
 
-export const HOURS = [
-  '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00',
-  '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00',
-]
+export const BOOKING_START_TIMES = Array.from({ length: 31 }, (_, index) => {
+  const minutes = 8 * 60 + index * 30
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+})
+
+export const BOOKING_END_TIMES = Array.from({ length: 33 }, (_, index) => {
+  const minutes = 8 * 60 + index * 30
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+})
+
+export const clockTimeToMinutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
 
 export const formatClockTime = (time: string) => {
-  const hour = Number(time.slice(0, 2))
-  return `${hour % 12 || 12} ${hour < 12 ? 'AM' : 'PM'}`
+  const hour = Number(time.slice(0, 2)) % 24
+  const minute = Number(time.slice(3, 5))
+  return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`
 }
 
-export const formatTimeRange = (time: string) => {
-  const hour = Number(time.slice(0, 2))
-  const nextHour = hour + 1
-  const formatHour = (value: number) => String(value % 12 || 12)
-  const startPeriod = hour < 12 ? 'AM' : 'PM'
-  const endPeriod = nextHour < 12 ? 'AM' : 'PM'
-  const start = `${formatHour(hour)}${startPeriod !== endPeriod ? ` ${startPeriod}` : ''}`
-  return `${start}–${formatHour(nextHour)} ${endPeriod}`
+export const formatTimeRange = (time: string, durationMinutes = 60) => {
+  const startMinutes = clockTimeToMinutes(time)
+  const endMinutes = startMinutes + durationMinutes
+  const formatTime = (minutes: number) => {
+    const hour = Math.floor(minutes / 60) % 24
+    const minute = minutes % 60
+    return {
+      clock: `${hour % 12 || 12}${minute ? `:${String(minute).padStart(2, '0')}` : ''}`,
+      period: hour < 12 ? 'AM' : 'PM',
+    }
+  }
+  const start = formatTime(startMinutes)
+  const end = formatTime(endMinutes)
+  const startLabel = start.period === end.period ? start.clock : `${start.clock} ${start.period}`
+  return `${startLabel}–${end.clock} ${end.period}`
 }
 
 export const formatInputDate = (date: Date) => {

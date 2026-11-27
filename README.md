@@ -25,8 +25,11 @@ migration backups.
 Vercel API requests use Supabase. Accounts remain in the existing `app_data` table;
 reservations, reserved court slots, schedule blocks, rate limits, and sessions use the
 tables and RPC functions defined in
-`supabase/migrations/20261126000000_serverless_reservations.sql`. Apply that migration
-to the Supabase project before deploying. Configure `SUPABASE_URL`,
+`supabase/migrations/20261126000000_serverless_reservations.sql` and
+`supabase/migrations/20261127000000_half_hour_booking_starts.sql`. Apply both migrations
+in order before deploying. Reservations are at least one hour long and can end by
+midnight. Start and end times are offered in 30-minute increments from 8:00 AM, and
+half-hour portions are prorated at the court's hourly rate. Configure `SUPABASE_URL`,
 `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` in Vercel's server-side
 environment variables; never expose the service-role key to the browser.
 
@@ -56,7 +59,7 @@ The interface adapts to phone, tablet, and desktop widths and supports keyboard 
 Player and administrator actions are checked by the server; passwords are stored as scrypt
 hashes, and session cookies are HttpOnly and SameSite. In production, serve the site through
 HTTPS so session cookies are marked Secure. The Supabase reservation-slot index and
-transactional RPC prevent concurrent requests from reserving the same court time.
+transactional RPC prevent concurrent requests from reserving overlapping court times.
 
 Local development keeps sessions, OTPs, and rate limits in memory, so a local server restart
 requires users to sign in again and clears pending verification codes and rate-limit counters.

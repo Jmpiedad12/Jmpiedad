@@ -2,10 +2,13 @@ import { useEffect, useState } from 'preact/hooks'
 import './app.css'
 import {
   addDays,
+  BOOKING_END_TIMES,
   COURTS,
+  clockTimeToMinutes,
   formatDate,
+  formatClockTime,
   formatTimeRange,
-  HOURS,
+  BOOKING_START_TIMES,
   HOURLY_RATES,
   RACKET_RENTAL_PER_DAY,
   reportDateRange,
@@ -20,6 +23,8 @@ import { DashboardNavigation } from './features/navigation/DashboardNavigation'
 import { ReservationTimeline } from './features/reservations/ReservationTimeline'
 import {
   bookingAddOns,
+  bookingSlotHours,
+  bookingSlotsOverlap,
   bookingSlots,
   bookingStatusLabel,
   courtSummary,
@@ -67,8 +72,10 @@ export function App() {
   })
   const [selectedDate, setSelectedDate] = useState(addDays(0))
   const [selectedSport, setSelectedSport] = useState('Pickleball')
-  const [preferredTime, setPreferredTime] = useState('18:00')
   const [selectedSlots, setSelectedSlots] = useState<BookingSlot[]>([])
+  const [reservationStartTime, setReservationStartTime] = useState('')
+  const [reservationEndTime, setReservationEndTime] = useState('')
+  const [reservationCourtId, setReservationCourtId] = useState<number | ''>('')
   const [racketRentalQuantity, setRacketRentalQuantity] = useState(0)
   const [shuttlecockQuantity, setShuttlecockQuantity] = useState(0)
   const [draftReservation, setDraftReservation] = useState<null | {
@@ -189,30 +196,57 @@ export function App() {
   const hourlyRate = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES]
   const racketRentalTotal = selectedSport === 'Badminton' ? racketRentalQuantity * RACKET_RENTAL_PER_DAY : 0
   const shuttlecockTotal = selectedSport === 'Badminton' ? shuttlecockQuantity * SHUTTLECOCK_PRICE : 0
-  const totalPayment = hourlyRate * selectedSlots.length + racketRentalTotal + shuttlecockTotal
-  const amountDueNow = hourlyRate * selectedSlots.length / 2 + racketRentalTotal + shuttlecockTotal
+  const selectedCourtHours = selectedSlots.reduce((total, slot) => total + bookingSlotHours(slot), 0)
+  const totalPayment = hourlyRate * selectedCourtHours + racketRentalTotal + shuttlecockTotal
+  const amountDueNow = hourlyRate * selectedCourtHours / 2 + racketRentalTotal + shuttlecockTotal
   const canReviewOrder = selectedSlots.length > 0 || (selectedSport === 'Badminton' && (racketRentalQuantity > 0 || shuttlecockQuantity > 0))
 
-  const slotReservation = (courtId: number, date: string, time: string) =>
+  const slotReservation = (courtId: number, date: string, time: string, durationMinutes = 60) =>
     bookings.find((booking) => (
-      bookingSlots(booking).some((slot) => slot.courtId === courtId && slot.time === time) &&
+      bookingSlots(booking).some((slot) => bookingSlotsOverlap(slot, { courtId, time, durationMinutes })) &&
       booking.date === date &&
       reservationOccupiesSlot(booking.status)
     ))
-  const isSlotTaken = (courtId: number, date: string, time: string) => Boolean(slotReservation(courtId, date, time))
+  const isSlotTaken = (courtId: number, date: string, time: string, durationMinutes = 60) => (
+    Boolean(slotReservation(courtId, date, time, durationMinutes))
+  )
 
   const availableCourts = COURTS.filter((court) => court.sports.includes(selectedSport))
-  const isSlotBlocked = (courtId: number, time: string) => scheduleBlocks.some((block) => (
-    block.date === selectedDate && block.slots.some((slot) => slot.courtId === courtId && slot.time === time)
+  const isSlotBlocked = (courtId: number, time: string, durationMinutes = 60) => scheduleBlocks.some((block) => (
+    block.date === selectedDate && block.slots.some((slot) => bookingSlotsOverlap(slot, { courtId, time, durationMinutes }))
   ))
-  const preferredTimeOptions = HOURS.filter((time) => slotIsInFuture(selectedDate, time))
-  const effectivePreferredTime = preferredTimeOptions.includes(preferredTime) ? preferredTime : preferredTimeOptions[0] || ''
-  const preferredTimeCourts = availableCourts.filter((court) => (
-    effectivePreferredTime &&
-    !isSlotTaken(court.id, selectedDate, effectivePreferredTime) &&
-    !isSlotBlocked(court.id, effectivePreferredTime)
+  const isSelectedTimeOverlapping = (courtId: number, time: string, durationMinutes = 60) => selectedSlots.some((slot) => (
+    bookingSlotsOverlap(slot, { courtId, time, durationMinutes })
   ))
-
+  const selectableCourtsForRange = (time: string, durationMinutes: number) => availableCourts.filter((court) => (
+    slotIsInFuture(selectedDate, time) &&
+    !isSlotTaken(court.id, selectedDate, time, durationMinutes) &&
+    !isSlotBlocked(court.id, time, durationMinutes) &&
+    !isSelectedTimeOverlapping(court.id, time, durationMinutes)
+  ))
+  const selectableEndTimesForStart = (startTime: string) => BOOKING_END_TIMES.filter((endTime) => {
+    const durationMinutes = clockTimeToMinutes(endTime) - clockTimeToMinutes(startTime)
+    return durationMinutes >= 60 && selectableCourtsForRange(startTime, durationMinutes).length > 0
+  })
+  const selectableStartTimes = BOOKING_START_TIMES.filter((time) => selectableEndTimesForStart(time).length > 0)
+  const effectiveReservationStartTime = selectableStartTimes.includes(reservationStartTime)
+    ? reservationStartTime
+    : selectableStartTimes[0] || ''
+  const selectableEndTimes = effectiveReservationStartTime
+    ? selectableEndTimesForStart(effectiveReservationStartTime)
+    : []
+  const effectiveReservationEndTime = selectableEndTimes.includes(reservationEndTime)
+    ? reservationEndTime
+    : selectableEndTimes[0] || ''
+  const selectedDurationMinutes = effectiveReservationStartTime && effectiveReservationEndTime
+    ? clockTimeToMinutes(effectiveReservationEndTime) - clockTimeToMinutes(effectiveReservationStartTime)
+    : 0
+  const courtsForSelectedRange = effectiveReservationStartTime && selectedDurationMinutes > 0
+    ? selectableCourtsForRange(effectiveReservationStartTime, selectedDurationMinutes)
+    : []
+  const effectiveReservationCourtId = courtsForSelectedRange.some((court) => court.id === reservationCourtId)
+    ? reservationCourtId
+    : courtsForSelectedRange[0]?.id || ''
   // Increment 2: user account, registration, and profile workflows.
   const generateOtp = async () => {
     setOtpSent(false)
@@ -220,7 +254,9 @@ export function App() {
     try {
       const email = authForm.email.trim().toLowerCase()
       if (!email) throw new Error('Enter your email address before requesting a verification code.')
-      if (authForm.password.length < 10) throw new Error('Enter a password with at least 10 characters before requesting a verification code.')
+      if (authForm.password.length < 10 || !/[A-Za-z]/.test(authForm.password) || !/\d/.test(authForm.password)) {
+        throw new Error('Use a password with at least 10 characters, 1 letter, and 1 number before requesting a verification code.')
+      }
       const response = await fetch('/api/auth/otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -264,6 +300,16 @@ export function App() {
 
     if (authMode === 'signup' && (!authForm.name.trim() || !authForm.phone.trim() || !authForm.email.trim() || !authForm.otp.trim())) {
       setAuthError('Enter your name, contact number, email, and the OTP sent to your email address.')
+      return
+    }
+
+    if (authMode === 'signup' && (authForm.password.length < 10 || !/[A-Za-z]/.test(authForm.password) || !/\d/.test(authForm.password))) {
+      setAuthError('Use a password with at least 10 characters, 1 letter, and 1 number.')
+      return
+    }
+
+    if (authMode === 'signup' && !/^\d{11}$/.test(authForm.phone)) {
+      setAuthError('Contact number must contain exactly 11 digits.')
       return
     }
 
@@ -364,7 +410,7 @@ export function App() {
       return
     }
     const slots = [...selectedSlots].sort((left, right) => (
-      left.courtId - right.courtId || HOURS.indexOf(left.time) - HOURS.indexOf(right.time)
+      left.courtId - right.courtId || BOOKING_START_TIMES.indexOf(left.time) - BOOKING_START_TIMES.indexOf(right.time)
     ))
     const bookingRacketRentalQuantity = selectedSport === 'Badminton' ? racketRentalQuantity : 0
     const bookingShuttlecockQuantity = selectedSport === 'Badminton' ? shuttlecockQuantity : 0
@@ -374,12 +420,13 @@ export function App() {
       window.alert('Select an available time or a badminton add-on.')
       return
     }
-    if (slots.some((slot) => isSlotTaken(slot.courtId, selectedDate, slot.time))) {
+    if (slots.some((slot) => isSlotTaken(slot.courtId, selectedDate, slot.time, slot.durationMinutes))) {
       window.alert('One or more selected time slots are already booked. Please update your selection.')
       return
     }
 
-    const courtTotal = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES] * slots.length
+    const courtHours = slots.reduce((total, slot) => total + bookingSlotHours(slot), 0)
+    const courtTotal = HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES] * courtHours
     const equipmentTotal = bookingRacketRentalQuantity * RACKET_RENTAL_PER_DAY
       + bookingShuttlecockQuantity * SHUTTLECOCK_PRICE
     const totalPrice = courtTotal + equipmentTotal
@@ -666,17 +713,18 @@ export function App() {
                   <h3>{court.name}</h3>
                   <p>{court.sports.join(' / ')}</p>
                   <div className="slot-list">
-                    {HOURS.map((time) => {
+                    {BOOKING_START_TIMES.map((time) => {
                       const reservation = slotReservation(court.id, selectedDate, time)
                       const occupied = Boolean(reservation)
-                      const block = scheduleBlocks.find((entry) => entry.date === selectedDate && entry.slots.some((slot) => slot.courtId === court.id && slot.time === time))
+                      const block = scheduleBlocks.find((entry) => entry.date === selectedDate && entry.slots.some((slot) => bookingSlotsOverlap(slot, { courtId: court.id, time })))
                       const selected = selectedBlockSlots.some((slot) => slot.courtId === court.id && slot.time === time)
+                      const selectedOverlap = !selected && selectedBlockSlots.some((slot) => bookingSlotsOverlap(slot, { courtId: court.id, time }))
                       return (
                         <button
                           type="button"
                           className={`slot ${block ? 'occupied' : occupied ? 'occupied' : selected ? 'selected' : 'free'}`}
                           key={`${court.id}-${time}`}
-                          disabled={occupied && !block}
+                          disabled={(occupied && !block) || (!block && selectedOverlap)}
                           onClick={() => {
                             if (block) {
                               void handleRemoveBlock(block.id)
@@ -727,14 +775,14 @@ export function App() {
 
               <div className="reservation-list">
                 {adminReservations.map((booking) => (
-                  <div key={booking.id} className="reservation-card">
+                  <div key={booking.id} className={`reservation-card reservation-card--${booking.status}`}>
                     <div>
                       <p className="muted">{booking.user}</p>
                       <h3>{courtSummary(bookingSlots(booking)) || 'Equipment only'}</h3>
                       <p>{formatDate(booking.date)}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''} · {booking.sport}</p>
                       {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
                       {booking.totalPrice != null ? <p className="muted">Total PHP {booking.totalPrice.toFixed(2)} · Amount due now PHP {booking.deposit.toFixed(2)}</p> : null}
-                      <p className="status status--pending">Status: {bookingStatusLabel(booking.status)}</p>
+                      <p className={`status status--${booking.status}`}>Status: {bookingStatusLabel(booking.status)}</p>
                       <ReservationTimeline booking={booking} />
                     </div>
 
@@ -844,146 +892,210 @@ export function App() {
 
             {bookingSyncNotice ? <p className="auth-error" role="status">{bookingSyncNotice}</p> : null}
 
-            <section className="availability-results" aria-live="polite">
-              <div className="panel-header">
-                <h3>Courts and available times</h3>
-                <span className="muted">Select hours across courts</span>
-              </div>
-              {availableCourts.length === 0 ? (
-                <p className="empty-state">No courts offer {selectedSport.toLowerCase()}.</p>
-              ) : (
-                <div className="court-grid">
-                  {availableCourts.map((court) => {
-                    const freeTimes = HOURS.filter((time) => slotIsInFuture(selectedDate, time) && !isSlotTaken(court.id, selectedDate, time) && !isSlotBlocked(court.id, time))
-                    return (
-                      <section key={court.id} className={`court-card schedule-court${selectedSlots.some((slot) => slot.courtId === court.id) ? ' selected' : ''}`}>
-                        <div className="schedule-court-heading">
-                          <h3>{court.name}</h3>
-                          <span>{freeTimes.length} free</span>
-                        </div>
-                        <div className="court-time-list">
-                          {HOURS.map((time) => {
-                            const blocked = isSlotBlocked(court.id, time)
-                            const reservation = slotReservation(court.id, selectedDate, time)
-                            const past = !slotIsInFuture(selectedDate, time)
-                            const occupied = Boolean(reservation) || blocked || past
-                            const selected = selectedSlots.some((slot) => slot.courtId === court.id && slot.time === time)
-                            return (
-                              <label key={time} className={`time-slot${selected ? ' selected' : ''}${occupied ? ' occupied' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  checked={selected}
-                                  disabled={occupied}
-                                  onChange={() => {
-                                    if (selected) {
-                                      setSelectedSlots((previous) => previous.filter((slot) => !(slot.courtId === court.id && slot.time === time)))
-                                    } else {
-                                      setSelectedSlots((previous) => [...previous, { courtId: court.id, time }])
-                                    }
-                                  }}
-                                />
-                                <span>{formatTimeRange(time)}</span>
-                                {occupied ? <span className="slot-unavailable">{blocked ? 'Blocked' : past ? 'Past' : slotStatusLabel(reservation?.status || 'reserved')}</span> : null}
-                              </label>
-                            )
-                          })}
-                        </div>
-                      </section>
-                    )
-                  })}
+            <div className="booking-workspace">
+              <section className="availability-results" aria-live="polite">
+                <div className="panel-header">
+                  <h3>Availability schedule</h3>
+                  <span className="muted">Open 8:00 AM–midnight. View only; swipe to see all courts and choose a free time below.</span>
                 </div>
-              )}
-            </section>
-
-            <details className="preferred-time-search">
-              <summary>Select preferred time</summary>
-              <div className="booking-form-grid">
-                <label>
-                  Preferred time
-                  <select value={effectivePreferredTime} onChange={(e) => setPreferredTime((e.target as HTMLSelectElement).value)}>
-                    {preferredTimeOptions.length > 0
-                      ? preferredTimeOptions.map((time) => <option value={time} key={time}>{formatTimeRange(time)}</option>)
-                      : <option value="">No future times available</option>}
-                  </select>
-                </label>
-              </div>
-              <p className="muted">{effectivePreferredTime ? `Courts free at ${formatTimeRange(effectivePreferredTime)} on ${formatDate(selectedDate)}` : 'No future times are available on this date.'}</p>
-              {preferredTimeCourts.length === 0 ? (
-                <p className="empty-state">No courts are available at that time.</p>
-              ) : (
-                <div className="preferred-court-list">
-                  {preferredTimeCourts.map((court) => (
-                    <button
-                      type="button"
-                      key={court.id}
-                      className="secondary"
-                      onClick={() => {
-                        setSelectedSlots((previous) => previous.some((slot) => slot.courtId === court.id && slot.time === effectivePreferredTime)
-                          ? previous
-                          : [...previous, { courtId: court.id, time: effectivePreferredTime }])
-                      }}
-                    >
-                      {court.name}
-                    </button>
-                  ))}
+                <div className="availability-grid-legend" aria-label="Availability key">
+                  <span className="availability-grid-legend-item"><span className="availability-legend-swatch availability-legend-swatch--available" />Available</span>
+                  <span className="availability-grid-legend-item"><span className="availability-legend-swatch availability-legend-swatch--pending" />Pending</span>
+                  <span className="availability-grid-legend-item"><span className="availability-legend-swatch availability-legend-swatch--reserved" />Booked or blocked</span>
+                  <span className="availability-grid-legend-item"><span className="availability-legend-swatch availability-legend-swatch--past" />Past</span>
                 </div>
-              )}
-            </details>
+                {availableCourts.length === 0 ? (
+                  <p className="empty-state">No courts offer {selectedSport.toLowerCase()}.</p>
+                ) : (
+                  <div className="availability-grid-scroll" role="region" aria-label="Court availability" tabIndex={0}>
+                    <table className="availability-grid">
+                      <thead>
+                        <tr>
+                          <th className="availability-time-heading" scope="col">Time</th>
+                          {availableCourts.map((court) => (
+                            <th key={court.id} scope="col">
+                              {court.name}
+                              <small>PHP {HOURLY_RATES[selectedSport as keyof typeof HOURLY_RATES]}/hour</small>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {BOOKING_START_TIMES.map((time) => (
+                          <tr key={time}>
+                            <th className="availability-time-heading" scope="row">{formatClockTime(time)}</th>
+                            {availableCourts.map((court) => {
+                              const blocked = isSlotBlocked(court.id, time)
+                              const reservation = slotReservation(court.id, selectedDate, time)
+                              const past = !slotIsInFuture(selectedDate, time)
+                              const state = blocked
+                                ? 'blocked'
+                                : reservation?.status === 'pending'
+                                  ? 'pending'
+                                  : reservation
+                                    ? 'reserved'
+                                    : past
+                                      ? 'past'
+                                      : 'available'
+                              const cellText = blocked ? 'Blocked' : reservation ? 'Booked' : past ? 'Past' : 'Free'
 
-            {selectedSport === 'Badminton' ? (
-              <section className="addon-options">
-                <h3>Optional badminton add-ons</h3>
-                <label className="addon-quantity">
-                  <span>
-                    <strong>Rental rackets</strong>
-                    <small>PHP {RACKET_RENTAL_PER_DAY} per racket/day</small>
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={racketRentalQuantity}
-                    aria-label="Rental racket quantity"
-                    onInput={(e) => setRacketRentalQuantity(Math.min(100, Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0))))}
-                  />
-                </label>
-                <label className="addon-quantity">
-                  <span>
-                    <strong>Shuttlecocks</strong>
-                    <small>PHP {SHUTTLECOCK_PRICE} each</small>
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={shuttlecockQuantity}
-                    aria-label="Shuttlecock quantity"
-                    onInput={(e) => setShuttlecockQuantity(Math.min(100, Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0))))}
-                  />
-                </label>
+                              return (
+                                <td key={court.id}>
+                                  <span className={`availability-cell availability-cell--${state}`}>
+                                    {cellText}
+                                  </span>
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </section>
-            ) : null}
 
-            <div className="booking-summary">
-              <div>
-                <span>Selected courts</span>
-                <strong>{courtSummary(selectedSlots) || (racketRentalQuantity > 0 || shuttlecockQuantity > 0 ? 'Equipment only' : 'Not selected')}</strong>
-              </div>
-              <div>
-                <span>Selected court-hours</span>
-                <strong>{selectedSlots.length}</strong>
-              </div>
-              <div>
-                <span>Total price · PHP {hourlyRate}/hour</span>
-                <strong>PHP {totalPayment.toFixed(2)}</strong>
-                <span>Amount due now · 50% court fees + full equipment</span>
-                <strong>PHP {amountDueNow.toFixed(2)}</strong>
+              <div className="booking-controls">
+                <section className="reservation-slot-picker" aria-labelledby="reservation-slot-picker-title">
+                  <h3 id="reservation-slot-picker-title">Choose a start time, end time, and court</h3>
+                  <p className="muted">Bookings must be at least one hour and end by midnight. Start and end times are available in 30-minute increments; half-hours are prorated.</p>
+                  {selectableStartTimes.length === 0 ? (
+                    <p className="empty-state">No future court ranges are available for this date and sport.</p>
+                  ) : (
+                    <>
+                      <div className="booking-form-grid">
+                        <label>
+                          Start time
+                          <select
+                            value={effectiveReservationStartTime}
+                            onChange={(event) => setReservationStartTime((event.target as HTMLSelectElement).value)}
+                          >
+                            {selectableStartTimes.map((time) => (
+                              <option value={time} key={time}>{formatClockTime(time)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          End time
+                          <select
+                            value={effectiveReservationEndTime}
+                            onChange={(event) => setReservationEndTime((event.target as HTMLSelectElement).value)}
+                          >
+                            {selectableEndTimes.map((time) => (
+                              <option value={time} key={time}>{formatClockTime(time)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          Court
+                          <select
+                            value={effectiveReservationCourtId}
+                            onChange={(event) => setReservationCourtId(Number((event.target as HTMLSelectElement).value))}
+                          >
+                            {courtsForSelectedRange.map((court) => (
+                              <option value={court.id} key={court.id}>{court.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={!effectiveReservationStartTime || !effectiveReservationEndTime || effectiveReservationCourtId === ''}
+                        onClick={() => {
+                          if (effectiveReservationStartTime && effectiveReservationEndTime && effectiveReservationCourtId !== '') {
+                            setSelectedSlots((previous) => [...previous, {
+                              courtId: effectiveReservationCourtId,
+                              time: effectiveReservationStartTime,
+                              durationMinutes: selectedDurationMinutes,
+                            }])
+                          }
+                        }}
+                      >
+                        Add reservation
+                      </button>
+                    </>
+                  )}
+                  {selectedSlots.length > 0 ? (
+                    <div className="selected-reservation-slots">
+                      <h4>Chosen reservations</h4>
+                      <ul>
+                        {selectedSlots.map((slot) => (
+                          <li key={`${slot.courtId}-${slot.time}`}>
+                            <span>{COURTS.find((court) => court.id === slot.courtId)?.name} · {formatTimeRange(slot.time, slot.durationMinutes)}</span>
+                            <button
+                              type="button"
+                              className="secondary"
+                              aria-label={`Remove ${COURTS.find((court) => court.id === slot.courtId)?.name} at ${formatClockTime(slot.time)}`}
+                              onClick={() => setSelectedSlots((previous) => previous.filter((entry) => (
+                                entry.courtId !== slot.courtId || entry.time !== slot.time
+                              )))}
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </section>
+
+                {selectedSport === 'Badminton' ? (
+                  <section className="addon-options">
+                    <h3>Optional badminton add-ons</h3>
+                    <label className="addon-quantity">
+                      <span>
+                        <strong>Rental rackets</strong>
+                        <small>PHP {RACKET_RENTAL_PER_DAY} per racket/day</small>
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={racketRentalQuantity}
+                        aria-label="Rental racket quantity"
+                        onInput={(e) => setRacketRentalQuantity(Math.min(100, Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0))))}
+                      />
+                    </label>
+                    <label className="addon-quantity">
+                      <span>
+                        <strong>Shuttlecocks</strong>
+                        <small>PHP {SHUTTLECOCK_PRICE} each</small>
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={shuttlecockQuantity}
+                        aria-label="Shuttlecock quantity"
+                        onInput={(e) => setShuttlecockQuantity(Math.min(100, Math.max(0, Math.floor(Number((e.target as HTMLInputElement).value) || 0))))}
+                      />
+                    </label>
+                  </section>
+                ) : null}
+
+                <div className="booking-summary">
+                  <div>
+                    <span>Selected courts</span>
+                    <strong>{courtSummary(selectedSlots) || (racketRentalQuantity > 0 || shuttlecockQuantity > 0 ? 'Equipment only' : 'Not selected')}</strong>
+                  </div>
+                  <div>
+                    <span>Selected court-hours</span>
+                    <strong>{selectedCourtHours}</strong>
+                  </div>
+                  <div>
+                    <span>Total price · PHP {hourlyRate}/hour</span>
+                    <strong>PHP {totalPayment.toFixed(2)}</strong>
+                    <span>Amount due now · 50% court fees + full equipment</span>
+                    <strong>PHP {amountDueNow.toFixed(2)}</strong>
+                  </div>
+                </div>
+
+                <button type="button" className="primary wide" disabled={!canReviewOrder} onClick={handleBookingReview}>Review order</button>
               </div>
             </div>
-
-            <button type="button" className="primary wide" disabled={!canReviewOrder} onClick={handleBookingReview}>Review order</button>
           </section>
 
           <section className="panel" id="player-reservations">
@@ -996,13 +1108,13 @@ export function App() {
                 <p className="empty-state">No reservations yet. Start by selecting a court and time.</p>
               ) : (
                 myReservations.map((booking) => (
-                  <div key={booking.id} className="reservation-card">
+                  <div key={booking.id} className={`reservation-card reservation-card--${booking.status}`}>
                     <div>
                       <p className="muted">{courtSummary(bookingSlots(booking)) || 'Equipment only'}</p>
                       <h3>{booking.sport}</h3>
                       <p>{formatDate(booking.date)}{bookingSlots(booking).length > 0 ? ` · ${slotSummary(bookingSlots(booking))}` : ''}</p>
                       {bookingAddOns(booking) ? <p className="muted">{bookingAddOns(booking)}</p> : null}
-                      <p className="status">Status: {bookingStatusLabel(booking.status)}</p>
+                      <p className={`status status--${booking.status}`}>Status: {bookingStatusLabel(booking.status)}</p>
                       <ReservationTimeline booking={booking} />
                     </div>
 
@@ -1039,7 +1151,7 @@ export function App() {
                 {draftReservation.slots.length > 0 ? (
                   <>
                     <span>Selected court-hours</span>
-                    <strong>{draftReservation.slots.length}</strong>
+                    <strong>{draftReservation.slots.reduce((total, slot) => total + bookingSlotHours(slot), 0)}</strong>
                   </>
                 ) : null}
                 {draftReservation.racketRentalQuantity > 0 ? (

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'preact/hooks'
 import { addDays, HOURLY_RATES } from '../courts/schedule'
 import type { AccountProfile, AccountRole, AuthForm, AuthMode } from './account'
 
@@ -105,6 +106,35 @@ export function AuthenticationView({
   onGenerateOtp,
   onSubmit,
 }: AuthenticationViewProps) {
+  const [passwordTouched, setPasswordTouched] = useState(false)
+  const [signupProgressFields, setSignupProgressFields] = useState({
+    username: false,
+    password: false,
+    name: false,
+    phone: false,
+    email: false,
+    otp: false,
+  })
+  const passwordMeetsRequirements = form.password.length >= 10 && /[A-Za-z]/.test(form.password) && /\d/.test(form.password)
+  const passwordInvalid = mode === 'signup' && passwordTouched && !passwordMeetsRequirements
+
+  useEffect(() => {
+    setPasswordTouched(false)
+    setSignupProgressFields({
+      username: false,
+      password: false,
+      name: false,
+      phone: false,
+      email: false,
+      otp: false,
+    })
+  }, [mode])
+
+  const signupFieldProgress = Object.values(signupProgressFields).filter(Boolean).length
+  const markSignupField = (field: keyof typeof signupProgressFields, complete: boolean) => {
+    setSignupProgressFields((previous) => ({ ...previous, [field]: complete }))
+  }
+
   return (
     <main className="auth-layout" id="main-content">
       <section className="auth-panel">
@@ -122,6 +152,26 @@ export function AuthenticationView({
           </div>
         )}
 
+        {mode === 'signup' && (
+          <div className="signup-progress">
+            <div className="signup-progress-heading">
+              <span>Account setup</span>
+              <span>{signupFieldProgress}/6 complete</span>
+            </div>
+            <div
+              className="signup-progress-track"
+              role="progressbar"
+              aria-label="Account setup progress"
+              aria-valuemin={0}
+              aria-valuemax={6}
+              aria-valuenow={signupFieldProgress}
+              aria-valuetext={`${signupFieldProgress} of 6 required fields complete`}
+            >
+              <div className="signup-progress-fill" style={{ width: `${(signupFieldProgress / 6) * 100}%` }} />
+            </div>
+          </div>
+        )}
+
         <form className="auth-form" onSubmit={onSubmit}>
           <label>
             Username
@@ -129,11 +179,12 @@ export function AuthenticationView({
               type="text"
               autoComplete="username"
               required
-              minLength={3}
-              maxLength={32}
-              pattern="[A-Za-z0-9_.-]+"
+              minLength={mode === 'signup' ? 3 : undefined}
+              maxLength={mode === 'signup' ? 32 : undefined}
+              {...(mode === 'signup' ? { pattern: '[A-Za-z0-9_.-]+' } : {})}
               value={form.username}
               onInput={(event) => onFormChange('username', (event.target as HTMLInputElement).value)}
+              onBlur={(event) => markSignupField('username', /^[A-Za-z0-9_.-]{3,32}$/.test((event.target as HTMLInputElement).value))}
               placeholder="playername"
             />
           </label>
@@ -146,8 +197,16 @@ export function AuthenticationView({
                 autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                 required
                 minLength={mode === 'signup' ? 10 : undefined}
+                {...(mode === 'signup' ? { pattern: '(?=.*[A-Za-z])(?=.*\\d).{10,}' } : {})}
+                title={mode === 'signup' ? 'Use at least 10 characters, including at least 1 letter and 1 number.' : undefined}
+                className={passwordInvalid ? 'password-input--invalid' : undefined}
                 value={form.password}
                 onInput={(event) => onFormChange('password', (event.target as HTMLInputElement).value)}
+                onBlur={(event) => {
+                  const password = (event.target as HTMLInputElement).value
+                  setPasswordTouched(true)
+                  markSignupField('password', password.length >= 10 && /[A-Za-z]/.test(password) && /\d/.test(password))
+                }}
                 placeholder="Your password"
               />
               <button
@@ -160,6 +219,7 @@ export function AuthenticationView({
                 <span className="eye-icon" aria-hidden="true" />
               </button>
             </span>
+            {mode === 'signup' ? <small className="muted">Use at least 10 characters and include at least 1 letter and 1 number.</small> : null}
           </label>
 
           {mode === 'signup' && (
@@ -174,6 +234,7 @@ export function AuthenticationView({
                   maxLength={100}
                   value={form.name}
                   onInput={(event) => onFormChange('name', (event.target as HTMLInputElement).value)}
+                  onBlur={(event) => markSignupField('name', (event.target as HTMLInputElement).value.trim().length >= 2)}
                   placeholder="Your full name"
                 />
               </label>
@@ -184,10 +245,14 @@ export function AuthenticationView({
                   type="tel"
                   autoComplete="tel"
                   required
-                  pattern="\+?[\d\s()-]{7,20}"
+                  inputMode="numeric"
+                  pattern="[0-9]{11}"
+                  minLength={11}
+                  maxLength={11}
                   value={form.phone}
-                  onInput={(event) => onFormChange('phone', (event.target as HTMLInputElement).value)}
-                  placeholder="+63 912 345 6789"
+                  onInput={(event) => onFormChange('phone', (event.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 11))}
+                  onBlur={(event) => markSignupField('phone', /^\d{11}$/.test((event.target as HTMLInputElement).value))}
+                  placeholder="09123456789"
                 />
               </label>
 
@@ -199,6 +264,7 @@ export function AuthenticationView({
                   required
                   value={form.email}
                   onInput={(event) => onFormChange('email', (event.target as HTMLInputElement).value)}
+                  onBlur={(event) => markSignupField('email', /^[^\s@]+@gmail\.com$/i.test((event.target as HTMLInputElement).value))}
                   placeholder="you@example.com"
                 />
               </label>
@@ -220,8 +286,9 @@ export function AuthenticationView({
                   maxLength={6}
                   required
                   value={form.otp}
-                  onInput={(event) => onFormChange('otp', (event.target as HTMLInputElement).value)}
-                  placeholder="123456"
+                  onInput={(event) => onFormChange('otp', (event.target as HTMLInputElement).value.replace(/\D/g, '').slice(0, 6))}
+                  onBlur={(event) => markSignupField('otp', otpSent && /^\d{6}$/.test((event.target as HTMLInputElement).value))}
+                  placeholder="******"
                 />
               </label>
             </>

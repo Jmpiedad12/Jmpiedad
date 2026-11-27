@@ -25,7 +25,10 @@ const COURT_SPORTS = {
   8: ['Badminton'],
   9: ['Badminton'],
 }
-const BOOKING_TIMES = new Set(Array.from({ length: 14 }, (_, index) => `${String(index + 8).padStart(2, '0')}:00`))
+const BOOKING_TIMES = new Set(Array.from({ length: 31 }, (_, index) => {
+  const minutes = 8 * 60 + index * 30
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+}))
 const sessions = new Map()
 const authAttempts = new Map()
 const otpAttempts = new Map()
@@ -67,11 +70,11 @@ const readBookings = () => {
     }
 
     if (booking.status !== 'confirmed') continue
-    const lastHour = bookingSlots(booking).reduce((latest, slot) => (
-      Math.max(latest, Number(slot.time.slice(0, 2)) + 1)
+    const lastMinute = bookingSlots(booking).reduce((latest, slot) => (
+      Math.max(latest, slotEndMinutes(slot.time, slot.durationMinutes))
     ), 0)
-    if (!lastHour) continue
-    const endTime = Date.parse(`${booking.date}T${String(lastHour).padStart(2, '0')}:00:00+08:00`)
+    if (!lastMinute) continue
+    const endTime = Date.parse(`${booking.date}T00:00:00+08:00`) + lastMinute * 60_000
     if (!Number.isFinite(endTime) || endTime > now) continue
     booking.status = 'completed'
     booking.statusUpdatedAt = new Date(now).toISOString()
@@ -93,28 +96,56 @@ const bookingSlots = (booking) => booking.slots ?? (
 )
 
 const reservationOccupiesSlot = (status) => ['pending', 'confirmed'].includes(status)
+const slotStartMinutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
+const slotDurationMinutes = (slot) => slot.durationMinutes ?? 60
+const slotEndMinutes = (time, durationMinutes = 60) => slotStartMinutes(time) + durationMinutes
+const formatBookingTimeRange = (time, durationMinutes = 60) => {
+  const format = (minutes) => {
+    const hour = Math.floor(minutes / 60) % 24
+    const minute = minutes % 60
+    return {
+      clock: `${hour % 12 || 12}${minute ? `:${String(minute).padStart(2, '0')}` : ''}`,
+      period: hour < 12 ? 'AM' : 'PM',
+    }
+  }
+  const start = format(slotStartMinutes(time))
+  const end = format(slotEndMinutes(time, durationMinutes))
+  return `${start.period === end.period ? start.clock : `${start.clock} ${start.period}`}–${end.clock} ${end.period}`
+}
+const slotsOverlap = (left, right) => (
+  left.courtId === right.courtId &&
+  slotStartMinutes(left.time) < slotEndMinutes(right.time, slotDurationMinutes(right)) &&
+  slotStartMinutes(right.time) < slotEndMinutes(left.time, slotDurationMinutes(left))
+)
+const hasOverlappingSlots = (slots) => slots.some((slot, index) => (
+  slots.slice(index + 1).some((other) => slotsOverlap(slot, other))
+))
 
 const validBookingSlots = (slots, sport, allowEmpty = false) => (
   Array.isArray(slots) && slots.length <= 36 && (allowEmpty || slots.length > 0) &&
   slots.every((slot) => (
     Number.isInteger(slot?.courtId) && COURT_SPORTS[slot.courtId]?.includes(sport) &&
-    BOOKING_TIMES.has(slot.time)
-  )) && new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length
+    BOOKING_TIMES.has(slot.time) &&
+    (slot.durationMinutes === undefined || (
+      Number.isInteger(slot.durationMinutes) && slot.durationMinutes >= 60 &&
+      slot.durationMinutes % 30 === 0 && slotEndMinutes(slot.time, slot.durationMinutes) <= 24 * 60
+    ))
+  )) && new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length &&
+  !hasOverlappingSlots(slots)
 )
 
 const hasBookingConflict = (bookings, date, slots, ignoreId = null) => bookings.some((booking) => (
   booking.id !== ignoreId && booking.date === date && reservationOccupiesSlot(booking.status) &&
-  bookingSlots(booking).some((existingSlot) => slots.some((slot) => (
-    slot.courtId === existingSlot.courtId && slot.time === existingSlot.time
-  )))
+  bookingSlots(booking).some((existingSlot) => slots.some((slot) => slotsOverlap(slot, existingSlot)))
 )) || readBlocks().some((block) => block.date === date && block.slots.some((blockedSlot) => (
-  slots.some((slot) => slot.courtId === blockedSlot.courtId && slot.time === blockedSlot.time)
+  slots.some((slot) => slotsOverlap(slot, blockedSlot))
 )))
 
 const validScheduleSlots = (slots) => (
   Array.isArray(slots) && slots.length > 0 && slots.length <= 36 &&
-  slots.every((slot) => Number.isInteger(slot?.courtId) && COURT_SPORTS[slot.courtId] && BOOKING_TIMES.has(slot.time)) &&
-  new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length
+  slots.every((slot) => Number.isInteger(slot?.courtId) && COURT_SPORTS[slot.courtId] && BOOKING_TIMES.has(slot.time) && slot.durationMinutes === undefined && slotEndMinutes(slot.time) <= 24 * 60) &&
+  new Set(slots.map((slot) => `${slot.courtId}:${slot.time}`)).size === slots.length &&
+  !hasOverlappingSlots(slots)
 )
 
 const validBookingDate = (date) => (
@@ -275,17 +306,35 @@ const notifyBookingStatus = async (booking, account) => {
     day: 'numeric',
     timeZone: 'UTC',
   }).format(new Date(`${booking.date}T00:00:00Z`))
-  const courtTimes = bookingSlots(booking).map((slot) => `Court ${slot.courtId} ${slot.time}`).join(', ')
-  const message = `Hi ${account.name?.trim() || account.username}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was ${statusText}.${approved ? '' : ' Any payment will be handled according to the refund policy.'}`
+  const courtTimes = bookingSlots(booking).map((slot) => `Court ${slot.courtId} ${formatBookingTimeRange(slot.time, slot.durationMinutes)}`).join(', ')
+  const fullName = account.name?.trim() || account.username
+  const phone = account.phone || (isPhone(account.contact || '') ? account.contact : '')
+  const email = account.email || (account.contact?.includes('@') ? account.contact : '')
+  const addOns = [
+    (booking.racketRentalQuantity ?? (booking.racketRental ? 1 : 0)) > 0
+      ? `Rental rackets: ${booking.racketRentalQuantity ?? 1}`
+      : null,
+    booking.shuttlecockQuantity > 0 ? `Shuttlecocks: ${booking.shuttlecockQuantity}` : null,
+  ].filter(Boolean).join(', ') || 'None'
+  const details = [
+    `Full name: ${fullName}`,
+    `Phone: ${phone || 'Not provided'}`,
+    `Email: ${email || 'Not provided'}`,
+    `Date: ${day}`,
+    `Court and time: ${courtTimes || 'No court booking'}`,
+    `Add-ons: ${addOns}`,
+  ].join('\n')
+  const message = approved
+    ? `Hi ${fullName}, your Red Court reservation was approved.\n\nReservation details:\n${details}`
+    : `Hi ${fullName}, your Red Court reservation for ${day}${courtTimes ? ` (${courtTimes})` : ''} was rejected. Any payment will be handled according to the refund policy.`
 
-  if (account.email) {
+  if (email) {
     try {
-      await sendEmailNotification(account.email, `Red Court reservation ${statusText}`, message)
+      await sendEmailNotification(email, `Red Court reservation ${statusText}`, message)
     } catch (error) {
       console.error(`Reservation email notification failed for booking ${booking.id}:`, error)
     }
   }
-  const phone = account.phone || (isPhone(account.contact || '') ? account.contact : '')
   if (phone && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
     try {
       await deliverSms(phone, message)
@@ -344,7 +393,7 @@ const server = createServer(async (request, response) => {
 
       const bookings = readBookings()
       if (bookings.some((booking) => booking.date === date && reservationOccupiesSlot(booking.status) &&
-        bookingSlots(booking).some((existing) => slots.some((slot) => slot.courtId === existing.courtId && slot.time === existing.time)))) {
+        bookingSlots(booking).some((existing) => slots.some((slot) => slotsOverlap(slot, existing))))) {
         return sendJson(response, 409, { error: 'A selected court time already has a reservation.' })
       }
       if (hasBookingConflict([], date, slots)) {
@@ -431,7 +480,8 @@ const server = createServer(async (request, response) => {
         return sendJson(response, 409, { error: 'One or more selected court times were just reserved. Refresh availability and choose another slot.' })
       }
 
-      const courtTotal = HOURLY_RATES[sport] * slots.length
+      const courtHours = slots.reduce((total, slot) => total + slotDurationMinutes(slot) / 60, 0)
+      const courtTotal = HOURLY_RATES[sport] * courtHours
       const equipmentTotal = racketRentalQuantity * RACKET_RENTAL_PER_DAY
         + shuttlecockQuantity * SHUTTLECOCK_PRICE
       const totalPrice = courtTotal + equipmentTotal
@@ -621,7 +671,9 @@ const server = createServer(async (request, response) => {
       const email = normalizeContact(String(body.email || ''))
       const password = String(body.password || '')
       if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
-      if (password.length < 10) return sendJson(response, 400, { error: 'Password must be at least 10 characters.' })
+      if (password.length < 10 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+        return sendJson(response, 400, { error: 'Password must be at least 10 characters and contain at least 1 letter and 1 number.' })
+      }
       const rateKey = `${requestIp(request)}:${email}`
       if (!allowAttempt(otpAttempts, rateKey, 3, 60 * 60 * 1000)) {
         return sendJson(response, 429, { error: 'Too many OTP requests. Try again later.' })
@@ -649,8 +701,10 @@ const server = createServer(async (request, response) => {
       if (!/^[A-Za-z0-9_.-]{3,32}$/.test(username)) {
         return sendJson(response, 400, { error: 'Username must be 3-32 characters using letters, numbers, dots, dashes or underscores.' })
       }
-      if (password.length < 10) return sendJson(response, 400, { error: 'Password must be at least 10 characters.' })
-      if (!isPhone(phone)) return sendJson(response, 400, { error: 'Enter a valid contact number.' })
+      if (password.length < 10 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+        return sendJson(response, 400, { error: 'Password must be at least 10 characters and contain at least 1 letter and 1 number.' })
+      }
+      if (!/^\d{11}$/.test(phone)) return sendJson(response, 400, { error: 'Contact number must contain exactly 11 digits.' })
       if (!isEmail(email)) return sendJson(response, 400, { error: 'Enter a valid email address.' })
 
       const accounts = readAccounts()
